@@ -1,0 +1,10 @@
+WEBVTT
+
+NOTE This is a comment.
+Not spoken.
+
+00:00:01.000 --> 00:00:04.000 align:start
+<v Speaker 1>Hello world.</v>
+
+00:00:05.000 --> 00:00:08.000
+<c.color>Another sentence.</c>

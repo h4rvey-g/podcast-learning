@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"><channel><title>A Podcast</title>
+<item><title>Unrelated episode</title><guid>first</guid><enclosure url="https://example.com/one.mp3" type="audio/mpeg"/></item>
+<item><title><![CDATA[Want to Enjoy Music More? Go for a Run]]></title><guid>episode-guid</guid><enclosure url="https://example.com/two.mp3" type="audio/mpeg"/></item>
+</channel></rss>

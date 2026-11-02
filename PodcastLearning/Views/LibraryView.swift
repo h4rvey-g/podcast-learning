@@ -1,0 +1,83 @@
+import SwiftUI
+import SwiftData
+import PodcastCore
+
+struct LibraryView: View {
+    @Environment(AppStore.self) private var store
+    @Environment(SettingsStore.self) private var settings
+    @Environment(\.scenePhase) private var scenePhase
+    @Query(sort: \Transcript.createdAt, order: .reverse) private var transcripts: [Transcript]
+    @Query private var memories: [WordMemory]
+    @State private var search = ""
+    @State private var showImport = false
+    @State private var sharedText: String?
+    @State private var showSettings = false
+    @State private var path: [Transcript] = []
+    private var filtered: [Transcript] { transcripts.filter { search.isEmpty || $0.title.localizedCaseInsensitiveContains(search) || $0.author.localizedCaseInsensitiveContains(search) } }
+    var body: some View {
+        NavigationStack(path: $path) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    Text("Library").font(.largeTitle.bold()).padding(.bottom, 20)
+                    if filtered.isEmpty {
+                        ContentUnavailableView(search.isEmpty ? "Your Listening, Your Learning" : "No Matching Transcripts", systemImage: search.isEmpty ? "headphones" : "magnifyingglass",
+                            description: Text(search.isEmpty ? "Import a podcast episode or some English text to start learning." : "Try another title or show name."))
+                        if search.isEmpty { PrimaryButton(title: "New Transcript", symbol: "plus") { showImport = true } }
+                    }
+                    ForEach(filtered) { transcript in
+                        NavigationLink(value: transcript) { libraryCard(transcript) }.buttonStyle(.plain)
+                    }
+                }.padding(16)
+            }.background(Palette.background)
+                .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Settings", systemImage: "gearshape") { showSettings = true }.labelStyle(.iconOnly) } }
+                .safeAreaInset(edge: .bottom) {
+                    HStack(spacing: 10) {
+                        HStack { Image(systemName: "magnifyingglass").foregroundStyle(.secondary); TextField("Search", text: $search).submitLabel(.search)
+                            if !search.isEmpty { Button("Clear Search", systemImage: "xmark.circle.fill") { search = "" }.labelStyle(.iconOnly) }
+                        }.padding(15).background(.regularMaterial, in: Capsule())
+                        Button { showImport = true } label: { Image(systemName: "plus").font(.title2).frame(width: 48, height: 48) }
+                            .foregroundStyle(Palette.onAccent).background(Palette.accent, in: Circle()).accessibilityLabel("New Transcript")
+                    }.padding(.horizontal, 16).padding(.bottom, 8)
+                }
+                .navigationDestination(for: Transcript.self) { ReaderView(transcript: $0) }
+                .sheet(isPresented: $showImport) { ImportView(initialText: sharedText ?? "") { path.append($0); sharedText = nil } }
+                .sheet(isPresented: $showSettings) { NavigationStack { SettingsView() } }
+        }
+        .alert("Something Went Wrong", isPresented: Binding(get: { store.error != nil }, set: { if !$0 { store.error = nil } })) { Button("Close", role: .cancel) { store.error = nil } } message: { Text(store.error ?? "") }
+        .task { await store.consumeSharedImports() }
+        .onChange(of: scenePhase) { _, phase in if phase == .active { Task { await store.consumeSharedImports() } } }
+        .onOpenURL { url in
+            if url.isFileURL {
+                do {
+                    let access = url.startAccessingSecurityScopedResource(); defer { if access { url.stopAccessingSecurityScopedResource() } }
+                    guard (try url.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0) <= 5_000_000 else { throw ImportError.tooLarge }
+                    let data = try Data(contentsOf: url)
+                    guard data.count <= 5_000_000 else { throw ImportError.tooLarge }
+                    guard let text = String(data: data, encoding: .utf8) else { throw ImportError.invalidResponse }
+                    let transcript = try store.importText(text, title: url.deletingPathExtension().lastPathComponent, fileExtension: url.pathExtension)
+                    path.append(transcript)
+                } catch { store.error = error.localizedDescription }
+            } else if url.host == "podcasts.apple.com" { sharedText = url.absoluteString; showImport = true }
+        }
+    }
+    private func libraryCard(_ transcript: Transcript) -> some View {
+        let mastered = transcript.activeItems.filter { item in memories.contains { $0.key == item.key && $0.box == 5 } }.count
+        return HStack(spacing: 12) {
+            CoverArt(transcript: transcript, size: 64)
+            VStack(alignment: .leading, spacing: 5) {
+                Text(transcript.title).font(.headline).lineLimit(2)
+                Text("\(transcript.author) · \(transcript.activeItems.count) words").font(.footnote).foregroundStyle(.secondary)
+                if transcript.analysisState == "pending" { Label("Finding key sentences…", systemImage: "sparkles").foregroundStyle(Palette.ai).font(.footnote) }
+                else if transcript.analysisState == "aiFailed" { Label("AI analysis failed · Retry in reader", systemImage: "arrow.clockwise").font(.footnote).foregroundStyle(.red) }
+                else {
+                    HStack {
+                        Label(transcript.activeItems.isEmpty ? "Ready to read" : mastered == transcript.activeItems.count ? "All mastered" : "\(transcript.activeItems.count - mastered) to practice", systemImage: mastered == transcript.activeItems.count && mastered > 0 ? "checkmark.circle" : "pencil")
+                            .font(.footnote).foregroundStyle(mastered > 0 && mastered == transcript.activeItems.count ? .green : .secondary)
+                        Spacer(minLength: 0)
+                        if !transcript.activeItems.isEmpty { ProgressView(value: Double(mastered), total: Double(transcript.activeItems.count)).tint(.secondary).frame(width: 55) }
+                    }
+                }
+            }.frame(maxWidth: .infinity, alignment: .leading)
+        }.padding(12).background(Palette.cell, in: RoundedRectangle(cornerRadius: 22))
+    }
+}

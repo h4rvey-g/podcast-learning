@@ -163,7 +163,7 @@ For each sentence, `NLTagger` returns token, lemma, lexical class and name type.
 - **Queue**: the transcript's non-removed items, minus mastered ones (`box == 5`) unless the toggle is on. Due and low-box items come first, then the rest in transcript order.
 - **Card**: the sentence with the item's text blanked out as `____`, with no length shown. Phrases blank the whole phrase. The paragraph clip auto-plays: `AVPlayer` seeks to `segment.start - 0.3s` and stops at `segment.end + 0.3s` via a boundary time observer. Without audio, `AVSpeechSynthesizer` speaks the sentence (voice and rate from Settings). There's a replay button.
 - **Attempt 1**: no letters shown.
-- **Attempt 2** (after a wrong answer): show the first letter, last letter and every 3rd letter (indices 0, 3, 6, … and the last). Example: `important` → `i _ _ o _ _ t _ t`. Spaces and punctuation in phrases are always shown.
+- **Attempt 2** (after a wrong answer): show the first letter, last letter and every 3rd letter (indices 0, 3, 6, … and the last). Example: `important` → `i _ _ o _ _ a _ t`. Spaces and punctuation in phrases are always shown.
 - **Reveal** (after a second wrong answer): show the answer, gloss and replay.
 - **Check**: `trim`, lowercase, map `’` to `'`, then compare with the surface form exactly.
 - **Grade** for Leitner: correct on attempt 1 → box +1. Correct on attempt 2 → box stays. Revealed → box = 1. Intervals for boxes 1–5 are 1, 2, 4, 8 and 16 days. Each result updates `WordMemory.attempts`, `correct` and `lastPracticedAt`.

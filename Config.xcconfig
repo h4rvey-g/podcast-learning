@@ -1,0 +1,7 @@
+// Replace these identifiers with identifiers registered to your Apple developer team.
+APP_BUNDLE_ID = com.example.PodcastLearning
+SHARE_BUNDLE_ID = $(APP_BUNDLE_ID).Share
+APP_GROUP_ID = group.$(APP_BUNDLE_ID)
+CLOUD_CONTAINER_ID = iCloud.$(APP_BUNDLE_ID)
+// Local storage works without CloudKit provisioning. See README.md before enabling.
+ENABLE_CLOUD_SYNC = NO
