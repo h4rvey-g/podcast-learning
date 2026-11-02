@@ -1,0 +1,38 @@
+# Local agent skills; keep skills-lock.json versioned
+/.agents/skills/
+
+# macOS metadata
+.DS_Store
+._*
+
+# Xcode and Swift build output / per-user state
+DerivedData/
+build/
+.build/
+xcuserdata/
+*.xcuserstate
+*.xccheckout
+*.xcscmblueprint
+*.ipa
+*.xcarchive
+*.dSYM/
+
+# Local dependencies and Python caches
+node_modules/
+.venv/
+__pycache__/
+*.py[cod]
+
+# Local environment and signing credentials
+.env
+.env.*
+!.env.example
+!.env.*.example
+*.p8
+*.p12
+*.mobileprovision
+
+# Local design backups and temporary output
+/designs/backups/
+*.tmp
+*.log
