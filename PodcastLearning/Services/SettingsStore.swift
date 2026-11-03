@@ -1,6 +1,7 @@
 import Foundation
 import Security
 import Observation
+import AVFoundation
 import PodcastCore
 
 @Observable final class SettingsStore {
@@ -24,6 +25,7 @@ import PodcastCore
         uid = defaults.string(forKey: "podTextUID") ?? UUID().uuidString
         defaults.set(uid, forKey: "podTextUID")
     }
+    var speechVoice: AVSpeechSynthesisVoice? { AVSpeechSynthesisVoice(identifier: voice) ?? AVSpeechSynthesisVoice(language: voice) ?? AVSpeechSynthesisVoice(language: "en-US") }
     var level: CEFR { CEFR(rawValue: targetLevel) ?? .b2 }
 }
 

@@ -1,7 +1,15 @@
 # Podcast Learning designs
 
-- `podcast-learning.fig`: 11 iPhone screens in light and dark appearances.
+- `podcast-learning.fig`: 15 iPhone states in light and dark appearances. The original 11 screens are on **Page 1**; **Download & Paragraph States** adds grouped dictation, grouped retry, downloading, and download-failed states.
 - `png/`: exports made with SF Pro, New York and PingFang SC.
+
+Dictation progress counts paragraphs. **Both attempts are edited directly in the paragraph**, never in separate answer fields below it. Blanks have no visible `[1]`/`[2]` labels. The first attempt uses an inline text input and insertion caret. On retry, the missed word becomes connected letters and underscores, with no cells, borders, backgrounds or extra letter spacing. Given first/last/every-third-index letters stay fixed; typing fills the underscores and advances to the next editable letter. Backspace and paste work within the same word. Each answer remains one accessible input, not tiny independent letter targets.
+
+Blanks are checked together, with per-word grades and immediately saved reviews. Correct answers stay locked while the learner retries only the missed words. The paragraph scrolls above the native keyboard as needed; Check and Reveal remain reachable. Light/dark states 07–08 and 12–13 share this interaction.
+
+The paragraph waveform (07–09, 12–13) is a seek control with a 44pt-high touch target. Tap or drag to preview a playback position; release starts downloaded audio at that point, clamped to the current paragraph's timestamps. Played fill and the playhead move continuously instead of changing one whole bar at a time. VoiceOver gets an adjustable slider, and interpolation respects Reduce Motion. Without timed downloaded audio, text-to-speech keeps its existing replay/progress behavior. Canvas comments record both input and seeking contracts.
+
+Download progress uses actual received bytes, with indeterminate progress while resolving audio or when the response size is unknown. Failure offers an inline retry; text to speech, reading, and dictation remain available. Canvas comments record these behaviors.
 
 ## Regenerate
 

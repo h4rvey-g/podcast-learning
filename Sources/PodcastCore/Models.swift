@@ -22,6 +22,7 @@ public enum ItemSource: String, CaseIterable, Sendable {
     public var sourceURL: String?
     public var episodeID: String?
     public var remoteAudioURL: String?
+    public var audioDuration: Double?
     public var targetLevelOverride: String?
     public var analysisState: String = "marked"
     public var analysisError: String?
@@ -29,7 +30,22 @@ public enum ItemSource: String, CaseIterable, Sendable {
     @Relationship(deleteRule: .cascade, inverse: \Segment.transcript) public var segments: [Segment]?
     @Relationship(deleteRule: .cascade, inverse: \DictationItem.transcript) public var items: [DictationItem]?
     public init(title: String, author: String = "Pasted text") { self.title = title; self.author = author }
+    public var duration: Double? {
+        if let audioDuration, audioDuration.isFinite && audioDuration > 0 { return audioDuration }
+        return (segments ?? []).compactMap(\.end).filter { $0.isFinite && $0 > 0 }.max()
+    }
     public var orderedSegments: [Segment] { (segments ?? []).sorted { $0.index < $1.index } }
+    public var spokenText: String { orderedSegments.map(\.text).joined(separator: " ") }
+    public func segment(atSpeechOffset location: Int) -> Segment? {
+        guard location >= 0 else { return nil }
+        var offset = 0
+        for segment in orderedSegments {
+            let end = offset + segment.text.utf16.count
+            if location < end { return segment }
+            offset = end + 1
+        }
+        return nil
+    }
     public var sentences: [Sentence] { orderedSegments.flatMap(\.orderedSentences) }
     public var activeItems: [DictationItem] { (items ?? []).filter { !$0.isRemoved }.sorted { ($0.sentence?.index ?? 0) < ($1.sentence?.index ?? 0) } }
 }
@@ -68,6 +84,7 @@ public enum ItemSource: String, CaseIterable, Sendable {
     public var source: String = "list"
     public var glossZh: String?
     public var definitionEn: String?
+    public var phonetic: String?
     public var isRemoved: Bool = false
     public var transcript: Transcript?
     @Relationship(deleteRule: .nullify) public var sentence: Sentence?

@@ -382,6 +382,17 @@
 			<key>sourceTree</key>
 			<string>&lt;group&gt;</string>
 		</dict>
+		<key>70DDEB384A60A7BCC6BC659F</key>
+		<dict>
+			<key>isa</key>
+			<string>PBXFileReference</string>
+			<key>lastKnownFileType</key>
+			<string>sourcecode.swift</string>
+			<key>path</key>
+			<string>PodcastLearning/Views/InlineParagraphEditor.swift</string>
+			<key>sourceTree</key>
+			<string>&lt;group&gt;</string>
+		</dict>
 		<key>BF126A64F1D1A756D9C7E656</key>
 		<dict>
 			<key>isa</key>
@@ -515,6 +526,13 @@
 			<key>fileRef</key>
 			<string>D0F70CD1F1826971CD16899A</string>
 		</dict>
+		<key>A4D3430C753CD8024D7534FB</key>
+		<dict>
+			<key>isa</key>
+			<string>PBXBuildFile</string>
+			<key>fileRef</key>
+			<string>70DDEB384A60A7BCC6BC659F</string>
+		</dict>
 		<key>22C2609EEBF586F02C6D3B7A</key>
 		<dict>
 			<key>isa</key>
@@ -566,6 +584,7 @@
 				<string>6F96DFAF4FD30258FBBD6013</string>
 				<string>4209CF4A1A7A72E438090F04</string>
 				<string>B55BA8C304E5FEE12D997C46</string>
+				<string>A4D3430C753CD8024D7534FB</string>
 				<string>22C2609EEBF586F02C6D3B7A</string>
 				<string>2A0B6D81CE4B981EF7BDD7A1</string>
 				<string>2FA98A0714A2FE902D6F99F1</string>
@@ -688,6 +707,7 @@
 				<string>ED9FE966BDCC68129F59E63F</string>
 				<string>7BBA80460AF490ADB77ABC2A</string>
 				<string>D0F70CD1F1826971CD16899A</string>
+				<string>70DDEB384A60A7BCC6BC659F</string>
 				<string>BF126A64F1D1A756D9C7E656</string>
 				<string>5C7223930E216B667DB3838F</string>
 				<string>EE576DEFE51A407E29826DAD</string>

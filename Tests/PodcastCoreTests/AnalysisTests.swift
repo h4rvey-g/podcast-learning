@@ -102,3 +102,59 @@ func fixture(_ name: String) throws -> Data { try Data(contentsOf: Bundle.module
         #expect(!(items["required"] as? [String] ?? []).isEmpty)
     }
 }
+
+@MainActor @Test func sharedHighlightsKeepPhrasesWholeAndPreserveInflections() {
+    let text = "🎵 They studied music, keeping time. Time matters."
+    let phrase = DictationItem(text: "keeping time", key: "keep time", source: .ai)
+    let word = DictationItem(text: "time", key: "time")
+    let inflected = DictationItem(text: "study", key: "study", source: .manual)
+    let highlights = TextMatch.highlights(in: text, items: [word, phrase, inflected])
+    #expect(highlights.map { String(text[$0.range]) } == ["studied", "keeping time", "Time"])
+    #expect(highlights.map { $0.item.itemSource } == [.manual, .ai, .list])
+    #expect(TextMatch.highlights(in: "start", items: [DictationItem(text: "art", key: "art")]).isEmpty)
+}
+
+@MainActor @Test func durationUsesLatestFinitePositiveTimestamp() {
+    let transcript = Transcript(title: "Duration")
+    #expect(transcript.duration == nil)
+    transcript.segments = [Segment(index: 0, text: "A", end: 30), Segment(index: 1, text: "B", end: 75), Segment(index: 2, text: "C", end: .infinity), Segment(index: 3, text: "D", end: -1)]
+    #expect(transcript.duration == 75)
+    transcript.audioDuration = 2172
+    #expect(transcript.duration == 2172)
+    transcript.audioDuration = .nan
+    #expect(transcript.duration == 75)
+}
+
+@MainActor @Test func aiPronunciationsAreOptionalAndPersistWithWordDetails() throws {
+    let container = try testContainer(), context = container.mainContext
+    let transcript = TextImporter.makeTranscript(title: "IPA", paragraphs: ["Music feels profoundly different."])
+    context.insert(transcript)
+    let item = DictationItem(text: "Music", key: "music", sentence: transcript.sentences[0]); transcript.items = [item]
+    let json = """
+    {"keySentences":[],"extraItems":[{"text":"profoundly","sentenceId":0,"glossZh":"深刻地","definitionEn":"deeply","phonetic":"/prəˈfaʊndli/"}],
+    "glosses":[{"itemId":"\(item.id)","glossZh":"音乐","definitionEn":"sound","phonetic":"/ˈmjuːzɪk/"}]}
+    """
+    try JSONDecoder().decode(AIAnalysis.self, from: Data(json.utf8)).apply(to: transcript)
+    try context.save()
+    let stored = try context.fetch(FetchDescriptor<DictationItem>())
+    #expect(stored.first { $0.key == "music" }?.phonetic == "/ˈmjuːzɪk/")
+    #expect(stored.first { $0.key == "profoundly" }?.phonetic == "/prəˈfaʊndli/")
+    let schema = try #require(JSONSerialization.jsonObject(with: AIAnalysis.schemaData()) as? [String: Any])
+    let properties = try #require(schema["properties"] as? [String: [String: Any]])
+    for name in ["extraItems", "glosses"] {
+        let fields = try #require(properties[name]?["items"] as? [String: Any])
+        #expect((fields["required"] as? [String] ?? []).contains("phonetic"))
+    }
+}
+
+@MainActor @Test func speechOffsetsFollowOrderedParagraphsAndUTF16Boundaries() {
+    let transcript = Transcript(title: "Speech")
+    let first = Segment(index: 0, text: "🎵 Hi.")
+    let second = Segment(index: 1, text: "Another paragraph.")
+    transcript.segments = [second, first]
+    #expect(transcript.spokenText == first.text + " " + second.text)
+    #expect(transcript.segment(atSpeechOffset: 0)?.id == first.id)
+    #expect(transcript.segment(atSpeechOffset: first.text.utf16.count + 1)?.id == second.id)
+    #expect(transcript.segment(atSpeechOffset: transcript.spokenText.utf16.count) == nil)
+    #expect(transcript.segment(atSpeechOffset: -1) == nil)
+}

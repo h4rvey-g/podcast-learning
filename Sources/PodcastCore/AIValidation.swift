@@ -11,8 +11,9 @@ public struct AIAnalysis: Codable, Sendable {
         public let kind: String?
         public let glossZh: String
         public let definitionEn: String
+        public let phonetic: String?
     }
-    public struct Gloss: Codable, Sendable { public let itemId: String; public let glossZh: String; public let definitionEn: String }
+    public struct Gloss: Codable, Sendable { public let itemId: String; public let glossZh: String; public let definitionEn: String; public let phonetic: String? }
 
     @MainActor public func apply(to transcript: Transcript) {
         let sentences = Dictionary(transcript.sentences.map { ($0.index, $0) }, uniquingKeysWith: { first, _ in first })
@@ -24,6 +25,7 @@ public struct AIAnalysis: Codable, Sendable {
         for gloss in glosses {
             items[gloss.itemId.lowercased()]?.glossZh = gloss.glossZh
             items[gloss.itemId.lowercased()]?.definitionEn = gloss.definitionEn
+            items[gloss.itemId.lowercased()]?.phonetic = gloss.phonetic
         }
         var keys = Set((transcript.items ?? []).flatMap { [$0.key, $0.text.lowercased()] })
         var added: [DictationItem] = []
@@ -34,7 +36,7 @@ public struct AIAnalysis: Codable, Sendable {
             guard !keys.contains(key), !keys.contains(text.lowercased()) else { continue }
             keys.insert(key); keys.insert(text.lowercased())
             let item = DictationItem(text: text, key: key, source: .ai, sentence: sentence)
-            item.glossZh = extra.glossZh; item.definitionEn = extra.definitionEn; added.append(item)
+            item.glossZh = extra.glossZh; item.definitionEn = extra.definitionEn; item.phonetic = extra.phonetic; added.append(item)
         }
         transcript.items = (transcript.items ?? []) + added
     }
@@ -49,8 +51,8 @@ extension AIAnalysis {
         let string = ["type": "string"], integer = ["type": "integer"]
         let schema = object([
             "keySentences": array(["sentenceId": integer, "noteZh": string]),
-            "extraItems": array(["text": string, "sentenceId": integer, "kind": string, "glossZh": string, "definitionEn": string]),
-            "glosses": array(["itemId": string, "glossZh": string, "definitionEn": string])
+            "extraItems": array(["text": string, "sentenceId": integer, "kind": string, "glossZh": string, "definitionEn": string, "phonetic": string]),
+            "glosses": array(["itemId": string, "glossZh": string, "definitionEn": string, "phonetic": string])
         ])
         return try JSONSerialization.data(withJSONObject: schema, options: .sortedKeys)
     }

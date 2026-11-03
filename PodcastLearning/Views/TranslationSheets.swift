@@ -6,12 +6,14 @@ struct WordSheet: View {
     let word: String
     let sentence: Sentence
     let transcript: Transcript
+    let showInItems: (DictationItem) -> Void
     @Environment(AppStore.self) private var store
     @Environment(SettingsStore.self) private var settings
     @Environment(ClipPlayer.self) private var player
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.dynamicTypeSize) private var typeSize
     @State private var translation = ""
-    @State private var explanation = ""
+    @State private var details: AIAnalyzer.WordDetails?
     @State private var error: String?
     @State private var busy = false
     @State private var configuration: TranslationSession.Configuration?
@@ -20,40 +22,61 @@ struct WordSheet: View {
         return transcript.items?.first { $0.text.lowercased() == word.lowercased() || $0.key == key }
     }
     var body: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    HStack { Text(word).font(.system(.title2, design: .serif).bold()); if let level = item?.level { LevelBadge(level: level) }; Spacer(); RoundButton(title: "Pronounce", symbol: "speaker.wave.2") { player.play(text: word, settings: settings) } }
-                    Text("\(Lemmatizer.tokens(word).first?.lemma ?? word.lowercased()) · \(Lemmatizer.tokens(word).first?.pos ?? "phrase")").font(.subheadline).foregroundStyle(.secondary)
-                    if let gloss = item?.glossZh, !gloss.isEmpty { Text(gloss).font(.title3.weight(.semibold)) }
-                    else if !translation.isEmpty { Text(translation).font(.title3.weight(.semibold)) }
-                    else { Button("Translate Word", systemImage: "translate") { configuration = .init(source: .init(identifier: "en"), target: .init(identifier: "zh-Hans")) } }
-                    if let definition = item?.definitionEn { Text(definition).foregroundStyle(.secondary) }
-                    if let item { SourceLabel(source: item.itemSource) }
-                    if !explanation.isEmpty { Text(explanation).font(.body) }
-                    if let error { Text(error).font(.footnote).foregroundStyle(.red) }
-                    if busy { ProgressView("Generating gloss…") }
-                    HStack {
-                        Button(item?.isRemoved == false ? "Remove from Dictation" : "Add to Dictation", systemImage: item?.isRemoved == false ? "minus.circle" : "plus.circle") {
-                            if let item, !item.isRemoved { item.isRemoved = true; store.save() }
-                            else { store.addWord(word, sentence: sentence, transcript: transcript, gloss: translation.isEmpty ? nil : translation) }
-                        }.buttonStyle(.bordered)
-                        Button("AI Gloss", systemImage: "sparkles") { Task { await gloss() } }.buttonStyle(.bordered).disabled(busy)
-                    }
-                }.padding(20)
-            }.navigationTitle("Word").navigationBarTitleDisplayMode(.inline)
-                .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } } }
-                .translationTask(configuration) { session in
-                    do {
-                        let result = try await session.translate(word); translation = result.targetText
-                        if let item, item.glossZh == nil { item.glossZh = result.targetText; store.save() }
-                    } catch { self.error = "Translation unavailable. Download the English and Chinese language packs, then try again. \(error.localizedDescription)" }
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                HStack(spacing: 8) {
+                    Text(word).font(.system(.title2, design: .serif).bold())
+                    if let level = item?.level { LevelBadge(level: level) }
+                    Spacer()
+                    RoundButton(title: "Pronounce", symbol: "speaker.wave.2") { player.play(text: word, settings: settings) }
+                    RoundButton(title: "Close", symbol: "xmark") { dismiss() }
                 }
-        }.presentationDetents([.medium, .large]).presentationDragIndicator(.visible)
+                Text([Lemmatizer.tokens(word).first?.lemma ?? word.lowercased(), Lemmatizer.tokens(word).first?.pos ?? "phrase", details?.phonetic ?? item?.phonetic].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · "))
+                    .font(.subheadline).foregroundStyle(.secondary)
+                if let gloss = details?.glossZh ?? item?.glossZh, !gloss.isEmpty { Text(gloss).font(.title3.weight(.semibold)) }
+                else if !translation.isEmpty { Text(translation).font(.title3.weight(.semibold)) }
+                else { Button("Translate Word", systemImage: "translate") { configuration = .init(source: .init(identifier: "en"), target: .init(identifier: "zh-Hans")) } }
+                if let definition = details?.definitionEn ?? item?.definitionEn { Text(definition).foregroundStyle(.secondary) }
+                if (details?.phonetic ?? item?.phonetic ?? "").isEmpty {
+                    Button("Generate Word Details", systemImage: "sparkles") { Task { await gloss() } }.font(.footnote).disabled(busy)
+                }
+                if details != nil || !(item?.phonetic ?? "").isEmpty { Text("Pronunciation and definitions generated by AI.").font(.caption).foregroundStyle(.secondary) }
+                if let error { Text(error).font(.footnote).foregroundStyle(.red) }
+                if busy { ProgressView("Generating word details…") }
+            }.padding(20).padding(.top, 10)
+        }
+        .safeAreaInset(edge: .bottom) {
+            let layout = typeSize.isAccessibilitySize ? AnyLayout(VStackLayout(spacing: 10)) : AnyLayout(HStackLayout(spacing: 10))
+            layout {
+                Button {
+                    if let item, !item.isRemoved { item.isRemoved = true; store.save() }
+                    else {
+                        store.addWord(word, sentence: sentence, transcript: transcript, gloss: details?.glossZh ?? (translation.isEmpty ? nil : translation))
+                        saveDetails()
+                    }
+                } label: {
+                    Label(item?.isRemoved == false ? "Remove" : "Add to Dictation", systemImage: item?.isRemoved == false ? "xmark" : "plus")
+                        .frame(maxWidth: .infinity).padding(.vertical, 15).background(Color(uiColor: .tertiarySystemFill), in: Capsule())
+                }.foregroundStyle(item?.isRemoved == false ? .red : Palette.accent)
+                Button { if let item { showInItems(item); dismiss() } } label: {
+                    Label("Show in Items", systemImage: "list.bullet").frame(maxWidth: .infinity).padding(.vertical, 15).background(Color(uiColor: .tertiarySystemFill), in: Capsule())
+                }.foregroundStyle(.primary).disabled(item == nil)
+            }.font(.headline).buttonStyle(.plain).padding(20)
+        }
+        .translationTask(configuration) { session in
+            do {
+                let result = try await session.translate(word); translation = result.targetText
+                if let item, item.glossZh == nil { item.glossZh = result.targetText; store.save() }
+            } catch { self.error = "Translation unavailable. Download the English and Chinese language packs, then try again. \(error.localizedDescription)" }
+        }
+        .presentationDetents([.medium, .large]).presentationDragIndicator(.visible)
+    }
+    private func saveDetails() {
+        if let item, let details { item.glossZh = details.glossZh; item.definitionEn = details.definitionEn; item.phonetic = details.phonetic; store.save() }
     }
     @MainActor private func gloss() async {
         busy = true; error = nil; defer { busy = false }
-        do { explanation = try await AIAnalyzer(settings: settings).explain("Explain the word or phrase '\(word)' in this context: \(sentence.text)") }
+        do { details = try await AIAnalyzer(settings: settings).wordDetails(word, context: sentence.text); saveDetails() }
         catch { self.error = error.localizedDescription }
     }
 }
@@ -70,29 +93,36 @@ struct SentenceSheet: View {
     @State private var error: String?
     @State private var busy = false
     var body: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
-                    Text(sentence.text).font(.system(.title3, design: .serif)).lineSpacing(6)
-                    if sentence.isKey { Label("Key Sentence", systemImage: "sparkles").font(.footnote).foregroundStyle(Palette.ai); if let note = sentence.keyNoteZh { Text(note).font(.subheadline).foregroundStyle(.secondary) } }
-                    Divider()
-                    if !translation.isEmpty { Text(translation).font(.body) }
-                    else { Button("Translate to Chinese", systemImage: "translate") { configuration = .init(source: .init(identifier: "en"), target: .init(identifier: "zh-Hans")) } }
-                    HStack {
-                        Button("Play Paragraph", systemImage: "speaker.wave.2") { player.play(text: sentence.text, segment: sentence.segment, transcript: transcript, settings: settings) }.buttonStyle(.bordered)
-                        Button("AI Explain", systemImage: "sparkles") { Task { await explain() } }.buttonStyle(.bordered).disabled(busy)
-                    }
-                    if busy { ProgressView("Explaining…") }
-                    if !explanation.isEmpty { Text("AI Explanation").font(.headline); Text(explanation).textSelection(.enabled) }
-                    if let error { Text(error).font(.footnote).foregroundStyle(.red) }
-                }.padding(20)
-            }.navigationTitle("Sentence").navigationBarTitleDisplayMode(.inline)
-                .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } } }
-                .translationTask(configuration) { session in
-                    do { translation = try await session.translate(sentence.text).targetText }
-                    catch { self.error = "Translation unavailable. Download the language packs and try again. \(error.localizedDescription)" }
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                HStack {
+                    RoundButton(title: "Play Sentence", symbol: "speaker.wave.2") { player.play(text: sentence.text, settings: settings) }
+                    Spacer(); Text("Sentence").font(.headline); Spacer()
+                    RoundButton(title: "Close", symbol: "xmark") { dismiss() }
                 }
-        }.presentationDetents([.medium, .large]).presentationDragIndicator(.visible)
+                HighlightedText(sentence: sentence, items: transcript.activeItems)
+                VStack(alignment: .leading, spacing: 10) {
+                    Label("Translation", systemImage: "translate").font(.footnote.weight(.semibold)).foregroundStyle(.secondary)
+                    if !translation.isEmpty { Text(translation).font(.body) }
+                    else { Button("Translate to Chinese") { configuration = .init(source: .init(identifier: "en"), target: .init(identifier: "zh-Hans")) } }
+                }.card(fill: Palette.background)
+                VStack(alignment: .leading, spacing: 14) {
+                    HStack {
+                        Label("AI Explanation", systemImage: "sparkles").foregroundStyle(Palette.ai)
+                        Spacer()
+                        Button(explanation.isEmpty && sentence.keyNoteZh == nil ? "Generate" : "Regenerate", systemImage: "arrow.clockwise") { Task { await explain() } }.foregroundStyle(.secondary).disabled(busy)
+                    }.font(.footnote.weight(.semibold))
+                    if busy { ProgressView("Explaining…") }
+                    if let text = explanation.isEmpty ? sentence.keyNoteZh : explanation { Text(text).font(.callout).textSelection(.enabled) }
+                }.card(fill: Palette.background)
+                if let error { Text(error).font(.footnote).foregroundStyle(.red) }
+            }.padding(20).padding(.top, 10)
+        }
+        .translationTask(configuration) { session in
+            do { translation = try await session.translate(sentence.text).targetText }
+            catch { self.error = "Translation unavailable. Download the language packs and try again. \(error.localizedDescription)" }
+        }
+        .presentationDetents([.fraction(0.65), .large]).presentationDragIndicator(.visible)
     }
     @MainActor private func explain() async {
         busy = true; error = nil; defer { busy = false }

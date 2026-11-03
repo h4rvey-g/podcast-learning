@@ -10,22 +10,22 @@ The backend runs **on the device** in Swift, as specified in [`docs/PLAN.md`](do
 2. Change the identifiers in **`Config.xcconfig`** to your registered bundle ID and App Group. Select your signing team for **both** `PodcastLearning` and `ShareExtension`. App Groups require appropriate developer-account provisioning.
 3. Select the **PodcastLearning** scheme and an iPhone or installed iOS simulator. Run.
 4. Tap **+** to paste English text, import a UTF-8 TXT/SRT/VTT file, or import an Apple Podcasts **episode** link (`?i=…`).
-5. Optional: Settings → enter provider hostname, base path, model, and API key → **Save API Key** → **Test Connection** → enable AI analysis. The default provider is `api.openai.com`, `/v1`, `gpt-4.1`. Unsaved key edits are not used by the connection test.
+5. Optional: Settings → **Provider** to enter the hostname/base path and enable AI, **Model** to choose a model, and **API Key** → **Save API Key** → back to **Test Connection**. The defaults are `api.openai.com`, `/v1`, `gpt-4.1`. Unsaved key edits are not used by the connection test.
 
 Nothing is seeded into your library. Offline text imports, CEFR marking, manual word selection, TTS, and dictation work without an AI key. Translation requires Apple's English/Chinese language packs; use the Translate action in a word or sentence sheet to install them.
 
 ### Learning flow
 
-- **Library:** search imported transcripts and see practice/analysis status.
-- **Reader:** tap any word for its lemma/meaning; add or remove it from dictation. Long-press a sentence to translate or ask AI to explain it. Blue solid underlines = list, orange dashed = AI, teal dotted = manual; yellow backgrounds = key sentences.
-- **Items:** filter by source or CEFR level, remove/restore words, and long-press an item to change its example sentence.
-- **Dictation:** type the missing surface word/phrase, with a fixed-length blank. First miss reveals first/last/every-third-index letters; second miss reveals the answer. Replay uses the paragraph audio or sentence TTS. Each completed answer immediately saves a global Leitner review; closing a session keeps completed answers.
+- **Library:** search imported transcripts and see practice/analysis status. Podcast-link import previews the episode, transcript count, audio lookup, and target level before saving.
+- **Reader:** tap any word for its lemma/meaning; add or remove it from dictation, or jump to it in Items. Long-press a sentence to translate or ask AI to explain it. Blue solid underlines = list, orange wavy underlines with `*` = AI, teal dotted underlines with `+` = manual; yellow backgrounds = key sentences. Optional AI word details include IPA pronunciation; offline pronunciation audio remains available without AI.
+- **Items:** source chips show counts. Filter by source or CEFR level, swipe to remove, restore removed words, and long-press an item to change its example sentence. Rows show the example and current review box.
+- **Dictation:** tap blanks and type directly in the paragraph, with no separate answer fields. On the second attempt, the same blank becomes a connected word with underscores instead of cells or borders: supplied first/last/every-third-index letters stay fixed, typing fills the underscores and advances through missing letters, and backspace/paste work in place. The original wrong attempt is retained in answer history. Check grades the visible blanks together; a second miss reveals that answer. Overlapping word/phrase blanks become editable in successive checks within the same paragraph. Correct answers stay completed while you retry the others. Progress counts paragraphs; grades and global Leitner reviews remain per word and save immediately, even if you close the session. Replay uses the full paragraph audio or paragraph TTS. For downloaded, timed audio, tap or drag the smooth waveform to preview a position; release starts playback there within the current paragraph. Blanks have no visible number labels. Answers show incorrect attempt history and pronunciation audio. The completion screen shows elapsed time and can start a new round containing only missed words.
 - **Review:** boxes 1–5 schedule 1/2/4/8/16-day intervals. Box 5 is skipped unless “Include Mastered Words” is enabled in the reader's More menu.
 - **Share extension:** Podcasts → Share → Learn → Save. Open Learn to process pending imports. A failed shared import stays queued for retry; the app never silently discards it.
 
 ### Audio and network behavior
 
-Podcast imports call PodText directly, then resolve audio through iTunes lookup and RSS GUID/title matching. Downloaded audio stays in Application Support, excluded from backup; it can be deleted in Settings without deleting transcripts or review history. Missing audio on another device can be downloaded from the reader's More menu. Downloads and AI analysis do not block reading. A missing transcript shows an error; paste/file import remains available.
+Podcast imports call PodText directly, then resolve audio through iTunes lookup and RSS GUID/title matching. Downloaded audio stays in Application Support, excluded from backup; it can be deleted in Settings without deleting transcripts or review history. Missing audio on another device can be downloaded in the reader or its More menu. The reader shows byte-based download progress (indeterminate when the size is unknown) and an inline Retry Audio Download action on failure, including failed audio-link resolution. Interrupted downloads can be restarted from the reader after relaunch. Downloads and AI analysis do not block reading or text-to-speech practice. A missing transcript shows an error; paste/file import remains available.
 
 AI uses the pinned **MacPaw/OpenAI** SDK and a single long-context analysis call per import. Strict JSON-schema output falls back to JSON-object mode only for response-format rejection. Responses are decoded and checked against real sentence/item IDs, verbatim text boundaries, duplicates, and previously removed words. Interrupted/failed analysis can be retried. AI is opt-in: enabling it sends transcript content to your selected provider and may incur usage charges. Keys are stored in device-only Keychain storage, never SwiftData or iCloud.
 
@@ -44,6 +44,7 @@ Models use optional relationships/defaulted fields, no unique constraints, and d
 ```sh
 # Core unit/integration tests on macOS; no simulator, key, or network required
 swift test
+node scripts/check-waveform.mjs  # render the real SwiftUI waveform on macOS
 
 # App + share extension, both simulator architectures; no signing required
 xcodebuild -project PodcastLearning.xcodeproj \
@@ -64,11 +65,11 @@ Tests cover answer normalization, hint/attempt states, Leitner transitions and q
 
 ### Device verification checklist
 
-- Import a podcast with audio and replay a paragraph; check pause, 15-second skips, speed, headphones disconnect, and interruptions.
+- Import a podcast with audio and replay a paragraph; check pause, 15-second skips, speed, tap/drag paragraph seeking, headphones disconnect, and interruptions.
 - Install the en/zh-Hans translation packs and translate both a word and sentence.
 - Test share-extension URL/text/file import with signed App Groups.
 - Test a real long-context AI provider, including retry and schema fallback.
-- Verify all 11 Figma states on small/large phones, in dark mode, Dynamic Type, and VoiceOver.
+- Verify all 15 Figma states (including the Download & Paragraph States page) on small/large phones, in dark mode, Dynamic Type, and VoiceOver.
 - If enabled, verify CloudKit sync on two signed devices and re-download missing audio.
 
 ## Layout

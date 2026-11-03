@@ -115,7 +115,13 @@ public struct ITunesResponse: Decodable, Sendable {
         public let episodeUrl: String?
         public let episodeGuid: String?
         public let feedUrl: String?
+        public let trackTimeMillis: Double?
     }
+}
+
+public struct EpisodeAudio: Sendable {
+    public let url: URL
+    public let duration: Double?
 }
 
 public enum AudioResolver {
@@ -127,13 +133,14 @@ public enum AudioResolver {
         if let guid, let match = items.first(where: { $0.guid.trimmingCharacters(in: .whitespacesAndNewlines) == guid }) { return match.audioURL }
         return items.first { normalizedTitle($0.title) == normalizedTitle(title) }?.audioURL
     }
-    public static func resolve(_ link: EpisodeLink, title: String, session: URLSession = .shared) async throws -> URL? {
+    public static func resolve(_ link: EpisodeLink, title: String, session: URLSession = .shared) async throws -> EpisodeAudio? {
         let url = URL(string: "https://itunes.apple.com/lookup?id=\(link.showID)&entity=podcastEpisode&limit=200")!
         let lookup = try JSONDecoder().decode(ITunesResponse.self, from: await HTTP.data(for: URLRequest(url: url), session: session))
         let episode = lookup.results.first { String($0.trackId ?? 0) == link.episodeID }
-        if let value = episode?.episodeUrl, let url = URL(string: value), url.scheme == "https" { return url }
+        let duration = episode?.trackTimeMillis.flatMap { $0.isFinite && $0 > 0 ? $0 / 1000 : nil }
+        if let value = episode?.episodeUrl, let url = URL(string: value), url.scheme == "https" { return EpisodeAudio(url: url, duration: duration) }
         guard let feed = lookup.results.compactMap(\.feedUrl).first, let feedURL = URL(string: feed), ["https", "http"].contains(feedURL.scheme) else { return nil }
         let data = try await HTTP.data(for: URLRequest(url: feedURL), session: session)
-        return try match(RSSParser.parse(data), guid: episode?.episodeGuid, title: title)
+        return try match(RSSParser.parse(data), guid: episode?.episodeGuid, title: title).map { EpisodeAudio(url: $0, duration: duration) }
     }
 }

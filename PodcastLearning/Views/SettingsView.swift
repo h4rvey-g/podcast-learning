@@ -6,7 +6,6 @@ import PodcastCore
 struct SettingsView: View {
     @Environment(SettingsStore.self) private var settings
     @Environment(AppStore.self) private var store
-    @Environment(\.dismiss) private var dismiss
     @Query(sort: \Transcript.createdAt, order: .reverse) private var transcripts: [Transcript]
     @State private var key = ""
     @State private var keyStatus = ""
@@ -14,50 +13,101 @@ struct SettingsView: View {
     @State private var testing = false
     @State private var deletingAudio: Transcript?
     @State private var storageRevision = 0
+    private var downloaded: [Transcript] { transcripts.filter { AudioStore.localURL($0.id) != nil } }
+    private var voices: [AVSpeechSynthesisVoice] { AVSpeechSynthesisVoice.speechVoices().filter { $0.language.hasPrefix("en-") }.sorted { $0.name < $1.name } }
     var body: some View {
         @Bindable var settings = settings
         Form {
             Section {
-                Picker(selection: $settings.targetLevel) { ForEach(CEFR.allCases, id: \.rawValue) { Text($0.rawValue).tag($0.rawValue) } } label: { Label("Target Level", systemImage: "gauge.with.dots.needle.50percent") }
-            } header: { Text("Learning") } footer: { Text("Words at or above this level are marked. Each transcript can override it. Changing this setting applies to new imports; use the reader’s level menu to update an existing transcript.") }
+                Picker(selection: $settings.targetLevel) { ForEach(CEFR.allCases, id: \.rawValue) { Text($0.rawValue).tag($0.rawValue) } } label: {
+                    Label { Text("Target Level") } icon: { SettingsIcon(symbol: "gauge.with.dots.needle.50percent") }
+                }.pickerStyle(.navigationLink)
+            } header: { Text("Learning") } footer: { Text("Words at or above this level are marked. Each transcript can override it. Changes apply to new imports; use the reader’s level menu for existing transcripts.") }
             Section {
-                Toggle("Enable AI Analysis", isOn: $settings.aiConsent)
-                LabeledContent("Provider") { TextField("api.openai.com", text: $settings.host).multilineTextAlignment(.trailing).textInputAutocapitalization(.never).autocorrectionDisabled() }
-                LabeledContent("Base Path") { TextField("/v1", text: $settings.basePath).multilineTextAlignment(.trailing).textInputAutocapitalization(.never).autocorrectionDisabled() }
-                LabeledContent("Model") { TextField("gpt-4.1", text: $settings.model).multilineTextAlignment(.trailing).textInputAutocapitalization(.never).autocorrectionDisabled() }
-                SecureField("API Key", text: $key).textInputAutocapitalization(.never).autocorrectionDisabled()
-                Button("Save API Key", systemImage: "key") {
-                    do { try APIKey.save(key.trimmingCharacters(in: .whitespacesAndNewlines)); keyStatus = key.isEmpty ? "API key removed" : "Saved in Keychain" }
-                    catch { keyStatus = error.localizedDescription }
-                }
-                if !keyStatus.isEmpty { Text(keyStatus).font(.footnote).foregroundStyle(.secondary) }
-                Button { Task { await testConnection() } } label: { HStack { Label("Test Connection", systemImage: "network"); if testing { Spacer(); ProgressView() } } }.disabled(testing)
+                NavigationLink { providerForm } label: { row("Provider", value: settings.host, symbol: "server.rack", color: .indigo) }
+                NavigationLink {
+                    Form { TextField("Model", text: $settings.model).textInputAutocapitalization(.never).autocorrectionDisabled() }.navigationTitle("Model")
+                } label: { row("Model", value: settings.model, symbol: "cpu", color: .indigo) }
+                NavigationLink { apiKeyForm } label: { row("API Key", value: key.isEmpty ? "Not Set" : "In Keychain", symbol: "key", color: .indigo) }
+                Button { Task { await testConnection() } } label: {
+                    HStack { SettingsIcon(symbol: "cable.connector", color: .cyan); Text("Test Connection"); Spacer(); if testing { ProgressView() } }
+                }.disabled(testing)
                 if !testStatus.isEmpty { Text(testStatus).font(.footnote).foregroundStyle(.secondary) }
-            } header: { Text("AI") } footer: { Text("When enabled, imported transcripts and selected sentences are sent to your configured provider for analysis. Your API key stays in this device’s Keychain. Provider charges may apply. AI output can be inaccurate.") }
+            } header: { Text("AI") } footer: { Text(settings.aiConsent ? "AI is enabled. Transcripts are sent to your provider; charges may apply." : "AI is off. Enable it in Provider to generate explanations and word details.") }
             Section("Speech") {
-                Picker("Voice", selection: $settings.voice) { Text("English (US)").tag("en-US"); Text("English (UK)").tag("en-GB") }
-                VStack(alignment: .leading) { Text("Speaking Rate · \(settings.rate / Double(AVSpeechUtteranceDefaultSpeechRate), format: .number.precision(.fractionLength(1)))×"); Slider(value: $settings.rate, in: 0.25...0.6, step: 0.025).accessibilityLabel("Speaking Rate") }
+                Picker(selection: Binding(get: { settings.speechVoice?.identifier ?? settings.voice }, set: { settings.voice = $0 })) {
+                    ForEach(voices, id: \.identifier) { voice in Text("\(voice.name) (\(voice.language == "en-GB" ? "UK" : String(voice.language.dropFirst(3))))").tag(voice.identifier) }
+                } label: { Label { Text("Voice") } icon: { SettingsIcon(symbol: "waveform", color: .orange) } }.pickerStyle(.navigationLink)
+                NavigationLink {
+                    Form {
+                        Text("Speaking Rate · \(settings.rate / Double(AVSpeechUtteranceDefaultSpeechRate), format: .number.precision(.fractionLength(1)))×")
+                        Slider(value: $settings.rate, in: 0.25...0.6, step: 0.025).accessibilityLabel("Speaking Rate")
+                    }.navigationTitle("Speaking Rate")
+                } label: { row("Speaking Rate", value: String(format: "%.1f×", settings.rate / Double(AVSpeechUtteranceDefaultSpeechRate)), symbol: "speedometer", color: .orange) }
             }
-            Section("Downloaded Audio") {
-                ForEach(transcripts.filter { AudioStore.localURL($0.id) != nil }) { transcript in
-                    HStack { VStack(alignment: .leading, spacing: 4) { Text(transcript.title); Text(ByteCountFormatter.string(fromByteCount: AudioStore.size(transcript.id), countStyle: .file)).font(.footnote).foregroundStyle(.secondary) }; Spacer(); Button("Delete Audio", systemImage: "trash", role: .destructive) { deletingAudio = transcript }.labelStyle(.iconOnly).buttonStyle(.borderless).frame(width: 44, height: 44) }
+            Section("Storage and About") {
+                NavigationLink { audioForm } label: {
+                    row("Downloaded Audio", value: ByteCountFormatter.string(fromByteCount: downloaded.reduce(0) { $0 + AudioStore.size($1.id) }, countStyle: .file), symbol: "internaldrive", color: .gray)
                 }
-                if transcripts.allSatisfy({ AudioStore.localURL($0.id) == nil }) { Text("No audio downloaded").foregroundStyle(.secondary) }
+                NavigationLink { acknowledgments } label: { row("Acknowledgments", value: "", symbol: "book.closed", color: .gray) }
             }.id(storageRevision)
-            Section("Acknowledgments") {
-                Text("Vocabulary levels: CEFR-J Wordlist Version 1.6, compiled by Yukio Tono (Tokyo University of Foreign Studies, Tono Lab) and Octanove Vocabulary Profile C1/C2 Version 1.0. Variant spellings merged; duplicate senses retain the lowest level.").font(.footnote)
-                Link("CEFR-J Project", destination: URL(string: "https://www.cefr-j.org/")!)
-                Link("Octanove Vocabulary Profile · CC BY-SA", destination: URL(string: "https://github.com/openlanguageprofiles/olp-en-cefrj")!)
-                Link("CC BY-SA 4.0 License", destination: URL(string: "https://creativecommons.org/licenses/by-sa/4.0/")!)
-                Text("Transcripts via PodText. Audio and transcripts belong to their respective publishers. OpenAI Swift SDK by MacPaw (MIT).").font(.footnote).foregroundStyle(.secondary)
-            }
         }.navigationTitle("Settings")
-            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
-            .onAppear { do { key = try APIKey.read(); keyStatus = key.isEmpty ? "No API key saved" : "In Keychain" } catch { keyStatus = error.localizedDescription } }
+            .onAppear { readKey() }
             .confirmationDialog("Delete downloaded audio? The transcript and word progress are kept.", isPresented: Binding(get: { deletingAudio != nil }, set: { if !$0 { deletingAudio = nil } }), titleVisibility: .visible) {
-                Button("Delete Audio", role: .destructive) { if let transcript = deletingAudio { do { try AudioStore.delete(transcript.id); storageRevision += 1 } catch { store.error = error.localizedDescription } }; deletingAudio = nil }
+                Button("Delete Audio", role: .destructive) {
+                    if let transcript = deletingAudio { do { try AudioStore.delete(transcript.id); storageRevision += 1 } catch { store.error = error.localizedDescription } }
+                    deletingAudio = nil
+                }
                 Button("Cancel", role: .cancel) { deletingAudio = nil }
             }
+    }
+    private func row(_ title: String, value: String, symbol: String, color: Color) -> some View {
+        HStack(spacing: 12) { SettingsIcon(symbol: symbol, color: color); Text(title); Spacer(); Text(value).foregroundStyle(.secondary).lineLimit(1) }
+    }
+    private var providerForm: some View {
+        @Bindable var settings = settings
+        return Form {
+            Section {
+                Toggle("Enable AI Analysis", isOn: $settings.aiConsent)
+                LabeledContent("Hostname") { TextField("api.openai.com", text: $settings.host).multilineTextAlignment(.trailing).textInputAutocapitalization(.never).autocorrectionDisabled() }
+                LabeledContent("Base Path") { TextField("/v1", text: $settings.basePath).multilineTextAlignment(.trailing).textInputAutocapitalization(.never).autocorrectionDisabled() }
+            } footer: { Text("When enabled, imported transcripts and selected sentences are sent to your configured provider for analysis. Your API key stays in this device’s Keychain. Provider charges may apply. AI output, including pronunciation, can be inaccurate.") }
+        }.navigationTitle("Provider")
+    }
+    private var apiKeyForm: some View {
+        Form {
+            SecureField("API Key", text: $key).textInputAutocapitalization(.never).autocorrectionDisabled()
+            Button("Save API Key", systemImage: "key") {
+                do { let value = key.trimmingCharacters(in: .whitespacesAndNewlines); try APIKey.save(value); key = value; keyStatus = value.isEmpty ? "API key removed" : "Saved in Keychain" }
+                catch { keyStatus = error.localizedDescription }
+            }
+            if !keyStatus.isEmpty { Text(keyStatus).font(.footnote).foregroundStyle(.secondary) }
+        }.navigationTitle("API Key")
+    }
+    private var audioForm: some View {
+        Form {
+            ForEach(downloaded) { transcript in
+                HStack {
+                    VStack(alignment: .leading, spacing: 4) { Text(transcript.title); Text(ByteCountFormatter.string(fromByteCount: AudioStore.size(transcript.id), countStyle: .file)).font(.footnote).foregroundStyle(.secondary) }
+                    Spacer()
+                    Button("Delete Audio", systemImage: "trash", role: .destructive) { deletingAudio = transcript }.labelStyle(.iconOnly).buttonStyle(.borderless).frame(width: 44, height: 44)
+                }
+            }
+            if downloaded.isEmpty { Text("No audio downloaded").foregroundStyle(.secondary) }
+        }.id(storageRevision).navigationTitle("Downloaded Audio")
+    }
+    private var acknowledgments: some View {
+        Form {
+            Text("Vocabulary levels: CEFR-J Wordlist Version 1.6, compiled by Yukio Tono (Tokyo University of Foreign Studies, Tono Lab) and Octanove Vocabulary Profile C1/C2 Version 1.0. Variant spellings merged; duplicate senses retain the lowest level.").font(.footnote)
+            Link("CEFR-J Project", destination: URL(string: "https://www.cefr-j.org/")!)
+            Link("Octanove Vocabulary Profile · CC BY-SA", destination: URL(string: "https://github.com/openlanguageprofiles/olp-en-cefrj")!)
+            Link("CC BY-SA 4.0 License", destination: URL(string: "https://creativecommons.org/licenses/by-sa/4.0/")!)
+            Text("Transcripts via PodText. Audio and transcripts belong to their respective publishers. OpenAI Swift SDK by MacPaw (MIT).").font(.footnote).foregroundStyle(.secondary)
+        }.navigationTitle("Acknowledgments")
+    }
+    private func readKey() {
+        do { key = try APIKey.read(); keyStatus = key.isEmpty ? "No API key saved" : "In Keychain" }
+        catch { keyStatus = error.localizedDescription }
     }
     @MainActor private func testConnection() async {
         testing = true; testStatus = ""; defer { testing = false }

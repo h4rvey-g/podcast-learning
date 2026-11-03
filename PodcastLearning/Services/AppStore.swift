@@ -10,6 +10,8 @@ import PodcastCore
     var error: String?
     var importing = false
     var downloading: Set<UUID> = []
+    var downloadProgress: [UUID: Double] = [:]
+    var audioErrors: [UUID: String] = [:]
     private var analyzing: Set<UUID> = []
     init(context: ModelContext, settings: SettingsStore) throws {
         self.context = context; self.settings = settings; marker = try .bundled()
@@ -28,22 +30,23 @@ import PodcastCore
         try insert(transcript)
         return transcript
     }
-    func importPodcast(_ input: String, level: String? = nil) async throws -> Transcript {
+    func podcastPreview(_ input: String) async throws -> Transcript {
+        let link = try EpisodeLink(input)
+        let response = try await PodTextClient().fetch(link, uid: settings.uid)
+        let transcript = try response.transcript()
+        transcript.sourceURL = link.url.absoluteString
+        return transcript
+    }
+    func importPodcast(_ input: String, level: String? = nil, preview: Transcript? = nil) async throws -> Transcript {
         let link = try EpisodeLink(input)
         let episodeID = link.episodeID
         if let existing = try context.fetch(FetchDescriptor<Transcript>(predicate: #Predicate { $0.episodeID == episodeID })).first { return existing }
-        let response = try await PodTextClient().fetch(link, uid: settings.uid)
-        let transcript = try response.transcript()
-        transcript.sourceURL = link.url.absoluteString; transcript.targetLevelOverride = level
+        let transcript: Transcript
+        if let preview, preview.episodeID == episodeID, preview.sourceURL == link.url.absoluteString { transcript = preview }
+        else { transcript = try await podcastPreview(input) }
+        transcript.targetLevelOverride = level
         try insert(transcript)
-        Task {
-            do {
-                if let remote = try await AudioResolver.resolve(link, title: transcript.title) {
-                    transcript.remoteAudioURL = remote.absoluteString; save()
-                    await downloadAudio(transcript)
-                }
-            } catch { transcript.analysisError = "Audio unavailable. Speech is still available. \(error.localizedDescription)"; save() }
-        }
+        Task { await downloadAudio(transcript) }
         return transcript
     }
     private func insert(_ transcript: Transcript) throws {
@@ -62,11 +65,25 @@ import PodcastCore
     }
     func downloadAudio(_ transcript: Transcript) async {
         guard downloading.insert(transcript.id).inserted else { return }
-        defer { downloading.remove(transcript.id) }
+        let id = transcript.id
+        audioErrors[id] = nil; downloadProgress[id] = nil
+        defer { downloading.remove(id); downloadProgress[id] = nil }
         do {
-            guard let value = transcript.remoteAudioURL, let url = URL(string: value) else { return }
-            try await AudioStore.download(url, id: transcript.id)
-        } catch { self.error = "Audio download failed. You can still practice with speech. \(error.localizedDescription)" }
+            if transcript.remoteAudioURL == nil {
+                guard let source = transcript.sourceURL,
+                      let remote = try await AudioResolver.resolve(EpisodeLink(source), title: transcript.title) else {
+                    throw ImportError.service("No episode audio was found. You can still use text to speech.")
+                }
+                transcript.remoteAudioURL = remote.url.absoluteString; transcript.audioDuration = remote.duration; save()
+            }
+            guard let value = transcript.remoteAudioURL, let url = URL(string: value) else { throw ImportError.invalidURL }
+            try await AudioStore.download(url, id: id) { [weak self] fraction in
+                Task { @MainActor in
+                    guard let self, self.downloading.contains(id) else { return }
+                    self.downloadProgress[id] = fraction
+                }
+            }
+        } catch { audioErrors[id] = error.localizedDescription }
     }
     func changeLevel(_ transcript: Transcript, to value: String?) {
         transcript.targetLevelOverride = value

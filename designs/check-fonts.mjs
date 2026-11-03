@@ -49,7 +49,7 @@ try {
   }
   // Also check the complete deliverable, not just the reduced settings-row reproduction.
   const design = new URL('./podcast-learning.fig', import.meta.url).pathname
-  const geometryCode = `const walk=(n,path)=>{const own=n.type==='TEXT'?[{path,text:n.characters,x:+n.x.toFixed(3),y:+n.y.toFixed(3),w:+n.width.toFixed(3),h:+n.height.toFixed(3),px:+n.parent.x.toFixed(3),py:+n.parent.y.toFixed(3)}]:[];return own.concat(n.children?n.children.flatMap((c,i)=>walk(c,path+'/'+i)):[])};figma.currentPage.children.flatMap(n=>walk(n,n.name)).sort((a,b)=>a.path.localeCompare(b.path))`
+  const geometryCode = `const walk=(n,path)=>{const own=n.type==='TEXT'?[{path,text:n.characters,x:+n.x.toFixed(3),y:+n.y.toFixed(3),w:+n.width.toFixed(3),h:+n.height.toFixed(3),px:+n.parent.x.toFixed(3),py:+n.parent.y.toFixed(3)}]:[];return own.concat(n.children?n.children.flatMap((c,i)=>walk(c,path+'/'+i)):[])};figma.root.children.flatMap(p=>p.children.flatMap(n=>walk(n,p.name+"/"+n.name))).sort((a,b)=>a.path.localeCompare(b.path))`
   const geometry = (path) => JSON.parse(op('eval', path, '-c', geometryCode, '--json'))
   const before = geometry(design)
   const roundtrip = join(dir, 'roundtrip.fig')
@@ -57,7 +57,52 @@ try {
   const after = geometry(roundtrip)
   assert.equal(after.length, before.length)
   before.forEach((text, i) => assert.deepEqual(after[i], text, `Geometry changed after save/reopen: ${text.path}`))
-  console.log(`PASS: 8 local font faces; ${samples.length} visible text samples; centered row/segment; ${before.length} text layers unchanged after save/reopen.`)
+  const inlineStates = JSON.parse(op('eval', design, '-c', `
+    figma.root.children.flatMap(p=>p.children.filter(f=>/^0[78] |^1[23] /.test(f.name)).map(f=>{
+      const card=f.findOne(n=>n.name==='Inline paragraph editor');
+      const flow=card?.findOne(n=>n.name==='Paragraph flow — inputs remain in reading order');
+      const letters=flow?.findAll(n=>/^(Fixed hint |Editable letter )/.test(n.name))??[];
+      const overlaps=[];
+      for(let i=0;i<(flow?.children.length??0);i++) for(let j=i+1;j<flow.children.length;j++) {
+        const a=flow.children[i],b=flow.children[j];
+        if(Math.min(a.x+a.width,b.x+b.width)-Math.max(a.x,b.x)>0.1&&Math.min(a.y+a.height,b.y+b.height)-Math.max(a.y,b.y)>0.1) overlaps.push([a.name,b.name]);
+      }
+      return {name:f.name,
+        comment:openpencil.getComments({resolved:false}).filter(c=>c.text.startsWith('One round per paragraph. Both attempts')&&c.page.id===p.id&&c.position.x>=f.x&&c.position.x<f.x+f.width&&c.position.y>=f.y&&c.position.y<f.y+f.height).length,
+        card:!!card,fields:flow?.findAll(n=>n.name.startsWith('Inline blank ')).length??0,
+        fixed:letters.filter(n=>n.name.startsWith('Fixed hint ')).length,
+        editable:letters.filter(n=>n.name.startsWith('Editable letter ')).length,
+        boxes:letters.filter(n=>n.strokes.length||n.fills.length).length,
+        underscores:flow?.findAll(n=>n.type==='TEXT'&&n.name==='Missing letter underscore'&&n.characters==='_').length??0,
+        markers:f.findAll(n=>n.type==='TEXT'&&/\\[\\d+\\]/.test(n.characters)).length,
+        legacy:f.findAll(n=>n.name==='Answer'||n.name==='Hint'||/^Blank [12]( —|$)/.test(n.name)).length,
+        overlaps,overflow:flow?.children.filter(n=>n.x < -0.1 || n.y < -0.1 || n.x+n.width > flow.width+0.1 || n.y+n.height > flow.height+0.1).map(n=>n.name)??[]
+      };
+    }))`, '--json'))
+  assert.equal(inlineStates.length, 8, 'Both appearances of all four input states must exist')
+  for (const state of inlineStates) {
+    assert.ok(state.card, `${state.name}: missing inline paragraph editor`)
+    assert.equal(state.comment, 1, `${state.name}: interaction note must remain on this screen after reopening`)
+    assert.equal(state.legacy, 0, `${state.name}: isolated answer field or hint row remains`)
+    assert.equal(state.markers, 0, `${state.name}: visible blank numbers must be removed`)
+    assert.equal(state.boxes, 0, `${state.name}: retry letters must not have boxes or fills`)
+    assert.deepEqual(state.overlaps, [], `${state.name}: inline words overlap`)
+    assert.deepEqual(state.overflow, [], `${state.name}: paragraph flow clips or overflows`)
+    assert.equal(state.fields, state.name.startsWith('12 ') ? 2 : 1, `${state.name}: inputs must live inside the paragraph flow`)
+    if (/^08 |^13 /.test(state.name)) {
+      assert.equal(state.fixed, 4, `${state.name}: keep given hint letters fixed`)
+      assert.equal(state.editable, 6, `${state.name}: missing editable letters`)
+      assert.equal(state.underscores, 5, `${state.name}: show underscores for the five still-missing letters`)
+    }
+  }
+  const waveforms = JSON.parse(op('eval', design, '-c', `figma.root.children.flatMap(p=>p.children.filter(f=>/^0[789] |^1[23] /.test(f.name)).map(f=>{const wave=f.findOne(n=>n.name==='Seekable paragraph waveform — tap or drag');const audio=f.findOne(n=>n.name==='Audio');return {name:f.name,height:wave?.height,overlap:audio?.parent.children.some(n=>n!==audio&&Math.min(n.x+n.width,audio.x+audio.width)-Math.max(n.x,audio.x)>0.1&&Math.min(n.y+n.height,audio.y+audio.height)-Math.max(n.y,audio.y)>0.1),head:!!wave?.findOne(n=>n.name==='Playback position — draggable playhead'),bars:wave?.findAll(n=>n.name.startsWith('Unplayed audio bar ')).length}}))`, '--json'))
+  assert.equal(waveforms.length, 10)
+  for (const wave of waveforms) {
+    assert.ok(wave.height >= 44 && wave.head, `${wave.name}: waveform needs a 44pt seek target and playhead`)
+    assert.equal(wave.bars, 28, `${wave.name}: waveform must fill the audio card`)
+    assert.equal(wave.overlap, false, `${wave.name}: taller audio card must not overlap the paragraph`)
+  }
+  console.log(`PASS: 8 local font faces; ${samples.length} visible text samples; centered row/segment; ${before.length} text layers unchanged after save/reopen; 8 unnumbered inline input states without boxes, overlaps or clipping; 10 seekable waveform states.`)
 } finally {
   rmSync(dir, { recursive: true, force: true })
 }

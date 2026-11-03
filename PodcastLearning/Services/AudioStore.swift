@@ -3,45 +3,16 @@ import AVFoundation
 import Observation
 import PodcastCore
 
-struct AudioStore {
-    static func directory() throws -> URL {
-        let url = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true).appendingPathComponent("Audio", isDirectory: true)
-        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
-        return url
-    }
-    static func file(_ id: UUID) throws -> URL { try directory().appendingPathComponent(id.uuidString + ".mp3") }
-    static func localURL(_ id: UUID) -> URL? {
-        guard let url = try? file(id), FileManager.default.fileExists(atPath: url.path) else { return nil }
-        return url
-    }
-    static func size(_ id: UUID) -> Int64 {
-        guard let url = localURL(id), let attributes = try? FileManager.default.attributesOfItem(atPath: url.path) else { return 0 }
-        return (attributes[.size] as? NSNumber)?.int64Value ?? 0
-    }
-    static func download(_ remote: URL, id: UUID) async throws {
-        guard ["https", "http"].contains(remote.scheme) else { throw ImportError.invalidURL }
-        let (temporary, response) = try await URLSession.shared.download(from: remote)
-        defer { try? FileManager.default.removeItem(at: temporary) }
-        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode),
-              !(http.mimeType ?? "").contains("text"), !(http.mimeType ?? "").contains("json") else { throw ImportError.invalidResponse }
-        let destination = try file(id)
-        if FileManager.default.fileExists(atPath: destination.path) {
-            _ = try FileManager.default.replaceItemAt(destination, withItemAt: temporary)
-        } else { try FileManager.default.moveItem(at: temporary, to: destination) }
-        var url = destination, values = URLResourceValues()
-        values.isExcludedFromBackup = true
-        try url.setResourceValues(values)
-    }
-    static func delete(_ id: UUID) throws {
-        if let url = localURL(id) { try FileManager.default.removeItem(at: url) }
-    }
-}
-
 @MainActor @Observable final class ClipPlayer: NSObject, AVSpeechSynthesizerDelegate {
     var isPlaying = false
     var position: Double = 0
     var duration: Double = 0
+    var segmentID: UUID?
+    var transcriptID: UUID?
+    var speechProgress: Double = 0
     var speed: Float = 1
+    private var utterance: AVSpeechUtterance?
+    private var speechTranscript: Transcript?
     var error: String?
     private let player = AVPlayer()
     private let speech = AVSpeechSynthesizer()
@@ -49,12 +20,15 @@ struct AudioStore {
     private var periodic: Any?
     private var notifications: [NSObjectProtocol] = []
     private var currentURL: URL?
+    private var playbackRequest = UUID()
+    private var seeking = false
     override init() {
         super.init(); speech.delegate = self
-        periodic = player.addPeriodicTimeObserver(forInterval: CMTime(seconds: 0.25, preferredTimescale: 600), queue: .main) { [weak self] time in
+        periodic = player.addPeriodicTimeObserver(forInterval: CMTime(seconds: 0.1, preferredTimescale: 600), queue: .main) { [weak self] _ in
             Task { @MainActor in
-                guard let self else { return }
-                self.position = time.seconds.isFinite ? time.seconds : 0
+                guard let self, !self.seeking, self.utterance == nil else { return }
+                let time = self.player.currentTime().seconds
+                self.position = time.isFinite ? time : 0
                 let total = self.player.currentItem?.duration.seconds ?? 0
                 self.duration = total.isFinite ? total : 0
                 if self.player.currentItem?.status == .failed {
@@ -69,7 +43,7 @@ struct AudioStore {
             guard note.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt == AVAudioSession.RouteChangeReason.oldDeviceUnavailable.rawValue else { return }
             Task { @MainActor in self?.stop() }
         })
-        notifications.append(center.addObserver(forName: .AVPlayerItemDidPlayToEndTime, object: nil, queue: .main) { [weak self] _ in Task { @MainActor in self?.isPlaying = false } })
+        notifications.append(center.addObserver(forName: .AVPlayerItemDidPlayToEndTime, object: nil, queue: .main) { [weak self] _ in Task { @MainActor in self?.stop() } })
     }
     isolated deinit {
         if let periodic { player.removeTimeObserver(periodic) }
@@ -80,33 +54,75 @@ struct AudioStore {
         do { try AVAudioSession.sharedInstance().setCategory(.playback, mode: .spokenAudio); try AVAudioSession.sharedInstance().setActive(true); return true }
         catch { self.error = error.localizedDescription; return false }
     }
-    func play(text: String, segment: Segment? = nil, transcript: Transcript? = nil, settings: SettingsStore, clip: Bool = true) {
+    func play(text: String, segment: Segment? = nil, transcript: Transcript? = nil, settings: SettingsStore, clip: Bool = true, startAt: Double? = nil) {
         stop(); guard activate() else { return }
-        let validTiming = (segment?.start ?? -1) >= 0 && (segment?.end ?? 0) > (segment?.start ?? 0)
+        segmentID = segment?.id; transcriptID = transcript?.id; speechProgress = 0
+        let range = PlaybackRange(start: segment?.start ?? -1, end: segment?.end ?? 0)
+        let validTiming = range != nil
         if let transcript, let url = AudioStore.localURL(transcript.id), !clip || validTiming {
             if currentURL != url { player.replaceCurrentItem(with: AVPlayerItem(url: url)); currentURL = url; position = 0 }
-            let start = clip ? max(0, (segment?.start ?? 0) - 0.3) : position
-            if clip, let end = segment?.end, end > start {
-                boundary = player.addBoundaryTimeObserver(forTimes: [NSValue(time: CMTime(seconds: end + 0.3, preferredTimescale: 600))], queue: .main) { [weak self] in Task { @MainActor in self?.stop() } }
+            let start = startAt ?? (clip ? max(0, (range?.start ?? 0) - 0.3) : position)
+            position = start
+            let request = playbackRequest
+            if clip, let end = range?.end {
+                boundary = player.addBoundaryTimeObserver(forTimes: [NSValue(time: CMTime(seconds: end + 0.3, preferredTimescale: 600))], queue: .main) { [weak self] in
+                    Task { @MainActor in if let self, self.playbackRequest == request { self.stop() } }
+                }
             }
-            isPlaying = true
+            isPlaying = true; seeking = true
             player.seek(to: CMTime(seconds: start, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] success in
-                Task { @MainActor in guard let self, success, self.isPlaying else { return }; self.player.playImmediately(atRate: self.speed) }
+                Task { @MainActor in
+                    guard let self, request == self.playbackRequest else { return }
+                    self.seeking = false
+                    guard success else { self.isPlaying = false; self.error = "Could not seek to this playback position."; return }
+                    if self.isPlaying { self.player.playImmediately(atRate: self.speed) }
+                }
             }
         } else {
             let utterance = AVSpeechUtterance(string: text)
-            utterance.voice = AVSpeechSynthesisVoice(language: settings.voice)
+            utterance.voice = settings.speechVoice
+            self.utterance = utterance; speechTranscript = clip ? nil : transcript
             utterance.rate = Float(settings.rate); speech.speak(utterance); isPlaying = true
         }
     }
     func toggle(text: String, transcript: Transcript, settings: SettingsStore) {
+        if transcriptID == transcript.id && (isPlaying || speech.isPaused || player.currentItem != nil) { toggleCurrent() }
+        else { play(text: text, transcript: transcript, settings: settings, clip: false) }
+    }
+    func isActive(_ segment: Segment, in transcript: Transcript) -> Bool { isPlaying && isCurrent(segment, in: transcript) }
+    private func isCurrent(_ segment: Segment, in transcript: Transcript) -> Bool {
+        guard transcriptID == transcript.id else { return false }
+        if let segmentID { return segmentID == segment.id }
+        guard utterance == nil, let start = segment.start, let end = segment.end else { return false }
+        return position >= start && position < end
+    }
+    func toggleParagraph(_ segment: Segment, transcript: Transcript, settings: SettingsStore) {
+        if isCurrent(segment, in: transcript) { toggleCurrent() }
+        else { play(text: segment.text, segment: segment, transcript: transcript, settings: settings) }
+    }
+    private func toggleCurrent() {
         if isPlaying {
             player.pause()
             if speech.isSpeaking { speech.pauseSpeaking(at: .immediate) }
             isPlaying = false
-        } else if speech.isPaused {
-            speech.continueSpeaking(); isPlaying = true
-        } else { play(text: text, transcript: transcript, settings: settings, clip: false) }
+        } else {
+            if speech.isPaused { speech.continueSpeaking() }
+            else { player.playImmediately(atRate: speed) }
+            isPlaying = true
+        }
+    }
+    func progress(in segment: Segment?) -> Double {
+        guard let segment, segmentID == segment.id else { return 0 }
+        if utterance != nil { return speechProgress }
+        guard let range = PlaybackRange(start: segment.start ?? -1, end: segment.end ?? 0) else { return 0 }
+        return range.fraction(at: position)
+    }
+    func canSeek(_ paragraph: PracticeParagraph, in transcript: Transcript) -> Bool {
+        AudioStore.localURL(transcript.id) != nil && PlaybackRange(start: paragraph.segment?.start ?? -1, end: paragraph.segment?.end ?? 0) != nil
+    }
+    func seek(to fraction: Double, in paragraph: PracticeParagraph, transcript: Transcript, settings: SettingsStore) {
+        guard canSeek(paragraph, in: transcript), let range = PlaybackRange(start: paragraph.segment?.start ?? -1, end: paragraph.segment?.end ?? 0) else { return }
+        play(text: paragraph.text, segment: paragraph.segment, transcript: transcript, settings: settings, startAt: range.time(at: fraction))
     }
     func skip(_ seconds: Double) {
         guard currentURL != nil else { return }
@@ -114,8 +130,19 @@ struct AudioStore {
     }
     func changeSpeed() { speed = speed >= 1.5 ? 0.75 : speed + 0.25; if isPlaying { player.rate = speed } }
     func stop() {
-        player.pause(); speech.stopSpeaking(at: .immediate); isPlaying = false
+        playbackRequest = UUID(); seeking = false
+        player.pause(); utterance = nil; speechTranscript = nil; speech.stopSpeaking(at: .immediate); isPlaying = false
+        segmentID = nil; transcriptID = nil; speechProgress = 0
         if let boundary { player.removeTimeObserver(boundary); self.boundary = nil }
     }
-    nonisolated func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) { Task { @MainActor in self.isPlaying = false } }
+    nonisolated func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
+        Task { @MainActor in if self.utterance === utterance { self.stop() } }
+    }
+    nonisolated func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, willSpeakRangeOfSpeechString range: NSRange, utterance: AVSpeechUtterance) {
+        Task { @MainActor in
+            guard self.utterance === utterance else { return }
+            if let segment = self.speechTranscript?.segment(atSpeechOffset: range.location) { self.segmentID = segment.id }
+            self.speechProgress = Double(range.location + range.length) / Double(max(1, utterance.speechString.utf16.count))
+        }
+    }
 }

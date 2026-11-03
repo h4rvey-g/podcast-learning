@@ -69,8 +69,10 @@ private final class StubProtocol: URLProtocol, @unchecked Sendable {
     let link = try EpisodeLink("https://podcasts.apple.com/us/podcast/a-show/id1200361736?i=1000799212333")
     let response = try await PodTextClient().fetch(link, uid: "test-uid", session: session)
     #expect(response.success)
-    #expect(try await AudioResolver.resolve(link, title: "anything", session: session)?.absoluteString == "https://example.com/two.mp3")
+    let audio = try #require(await AudioResolver.resolve(link, title: "anything", session: session))
+    #expect(audio.url.absoluteString == "https://example.com/two.mp3")
+    #expect(audio.duration == 2172)
     let thinned = try EpisodeLink("https://podcasts.apple.com/us/podcast/a-show/id42?i=99")
-    #expect(try await AudioResolver.resolve(thinned, title: "Want to Enjoy Music More? Go for a Run", session: session)?.absoluteString == "https://example.com/two.mp3")
+    #expect(try await AudioResolver.resolve(thinned, title: "Want to Enjoy Music More? Go for a Run", session: session)?.url.absoluteString == "https://example.com/two.mp3")
     await #expect(throws: ImportError.self) { try await HTTP.data(for: URLRequest(url: URL(string: "https://example.com/fail")!), session: session) }
 }
