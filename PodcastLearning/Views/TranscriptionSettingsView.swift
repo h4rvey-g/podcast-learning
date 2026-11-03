@@ -22,11 +22,7 @@ struct TranscriptionSettingsView: View {
                     } catch { speechKeyStatus = error.localizedDescription }
                 }
                 if !speechKeyStatus.isEmpty { Text(speechKeyStatus).font(.footnote).foregroundStyle(.secondary) }
-            } footer: { Text("Bilibili audio is sent to the configured Azure Speech resource or OpenRouter. Use microsoft/mai-transcribe-2 on OpenRouter; direct Azure uses MAI-Transcribe-2. Provider charges and preview availability apply. The Speech key is separate from your AI key and stays in this device’s Keychain. Recordings must be shorter than two hours. OpenRouter uploads are split into five-minute audio parts below its 25 MB multipart limit; completed parts are kept for retry. Speech recognition can make mistakes.") }
-            Section("Network Recovery") {
-                Text("Keep Learn open while transferring. Uploads and responses wait for connectivity and retry temporary failures up to five times. Downloaded audio and completed results are kept for retry after interruption.")
-                Text("A lost response may require uploading the audio again and may incur another charge. This API cannot resume uploads or retrieve a lost result by job ID.")
-            }.font(.footnote).foregroundStyle(.secondary)
+            }
         }.navigationTitle("Audio Transcription")
             .onAppear {
                 do { speechKey = try APIKey.read(account: "azureSpeech") }

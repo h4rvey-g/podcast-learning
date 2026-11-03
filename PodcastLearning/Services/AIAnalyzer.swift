@@ -5,7 +5,7 @@ import PodcastCore
 @MainActor struct AIAnalyzer {
     let settings: SettingsStore
     func completion(system: String, input: String, json: Bool = false) async throws -> String {
-        let client = try AIClient(baseURL: "https://\(settings.host)\(settings.basePath)", model: settings.model,
+        let client = try AIClient(baseURL: settings.baseURL, model: settings.model,
                                   key: APIKey.read(), api: AIProviderAPI(rawValue: settings.aiAPI) ?? .chat,
                                   thinking: ThinkingLevel(rawValue: settings.thinking) ?? .providerDefault)
         return try await client.completion(system: system, input: input, json: json)

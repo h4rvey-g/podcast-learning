@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!-- PodLearn app icon. Full-bleed square; iOS applies the corner mask. -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#8A6BFF"/>
+      <stop offset="1" stop-color="#4A2BD9"/>
+    </linearGradient>
+  </defs>
+  <rect width="1024" height="1024" fill="url(#bg)"/>
+  <!-- Sound waves rising from the book -->
+  <g fill="none" stroke="#FFFFFF" stroke-linecap="round" stroke-width="44">
+    <path d="M412 392 A142 142 0 0 1 612 392" opacity="0.95"/>
+    <path d="M336 316 A250 250 0 0 1 688 316" opacity="0.7"/>
+    <path d="M260 240 A358 358 0 0 1 764 240" opacity="0.45"/>
+  </g>
+  <circle cx="512" cy="470" r="44" fill="#FFF1B8"/>
+  <!-- Open book -->
+  <path d="M512 610 C440 556 330 540 218 556 L218 812 C330 796 440 812 512 866 Z" fill="#FFFFFF"/>
+  <path d="M512 610 C584 556 694 540 806 556 L806 812 C694 796 584 812 512 866 Z" fill="#FFFFFF" opacity="0.88"/>
+</svg>

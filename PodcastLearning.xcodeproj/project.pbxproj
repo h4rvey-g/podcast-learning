@@ -781,6 +781,8 @@
 				<string>$(inherited) @executable_path/Frameworks</string>
 				<key>GENERATE_INFOPLIST_FILE</key>
 				<string>NO</string>
+				<key>ASSETCATALOG_COMPILER_APPICON_NAME</key>
+				<string>AppIcon</string>
 				<key>ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME</key>
 				<string>AccentColor</string>
 				<key>SWIFT_OPTIMIZATION_LEVEL</key>
@@ -825,6 +827,8 @@
 				<string>$(inherited) @executable_path/Frameworks</string>
 				<key>GENERATE_INFOPLIST_FILE</key>
 				<string>NO</string>
+				<key>ASSETCATALOG_COMPILER_APPICON_NAME</key>
+				<string>AppIcon</string>
 				<key>ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME</key>
 				<string>AccentColor</string>
 				<key>SWIFT_OPTIMIZATION_LEVEL</key>

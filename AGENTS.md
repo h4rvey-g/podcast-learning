@@ -65,7 +65,7 @@ PY
 )
 ```
 
-**Verify:** wait for LiveContainer to finish importing and show **Learn**, then tap **Run**. A successful `devicectl` launch only proves the IPA URL was delivered, not that import or guest launch succeeded. If a replacement confirmation appears, verify it targets Learn and preserve its existing data. Never remove unrelated apps to make room without the user's approval.
+**Verify:** wait for LiveContainer to finish importing and show **PodLearn**, then tap **Run**. A successful `devicectl` launch only proves the IPA URL was delivered, not that import or guest launch succeeded. If a replacement confirmation appears, verify it targets PodLearn and preserve its existing data. Never remove unrelated apps to make room without the user's approval.
 
 The output IPA is `build/PodcastLearning-LiveContainer.ipa`; build failures are in `build/livecontainer-build.log`. If URL delivery fails, import that IPA on the phone using LiveContainer's **+** button and its Documents folder in Files.
 

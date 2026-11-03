@@ -25,7 +25,7 @@ private struct ShareContent: View {
                 else if let pending { Section("Transcript") { Text(pending.text).lineLimit(12) }; Text("This import will be processed next time you open Learn.").font(.footnote).foregroundStyle(.secondary) }
                 else if error == nil { ProgressView("Reading shared content…") }
                 if let error { Text(error).foregroundStyle(.red) }
-            }.navigationTitle("Learn")
+            }.navigationTitle("PodLearn")
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) { Button(saved ? "Close" : "Cancel") { context?.completeRequest(returningItems: nil) } }
                     ToolbarItem(placement: .confirmationAction) { if !saved { Button("Save") { save() }.disabled(pending == nil) } }

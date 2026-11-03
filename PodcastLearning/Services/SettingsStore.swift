@@ -6,8 +6,7 @@ import PodcastCore
 
 @Observable final class SettingsStore {
     var targetLevel: String { didSet { defaults.set(targetLevel, forKey: "targetLevel") } }
-    var host: String { didSet { defaults.set(host, forKey: "aiHost") } }
-    var basePath: String { didSet { defaults.set(basePath, forKey: "aiBasePath") } }
+    var baseURL: String { didSet { defaults.set(baseURL, forKey: "aiBaseURL") } }
     var model: String { didSet { defaults.set(model, forKey: "aiModel") } }
     var aiAPI: String { didSet { defaults.set(aiAPI, forKey: "aiAPI") } }
     var thinking: String { didSet { defaults.set(thinking, forKey: "thinking") } }
@@ -19,11 +18,11 @@ import PodcastCore
     var transcriptionConsent: Bool { didSet { defaults.set(transcriptionConsent, forKey: "transcriptionConsent") } }
     var keepBilibiliVideo: Bool { didSet { defaults.set(keepBilibiliVideo, forKey: "keepBilibiliVideo") } }
     let uid: String
-    private let defaults = UserDefaults.standard
-    init() {
+    private let defaults: UserDefaults
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
         targetLevel = defaults.string(forKey: "targetLevel") ?? "B2"
-        host = defaults.string(forKey: "aiHost") ?? "api.openai.com"
-        basePath = defaults.string(forKey: "aiBasePath") ?? "/v1"
+        baseURL = defaults.string(forKey: "aiBaseURL") ?? "https://\(defaults.string(forKey: "aiHost") ?? "api.openai.com")\(defaults.string(forKey: "aiBasePath") ?? "/v1")"
         model = defaults.string(forKey: "aiModel") ?? "gpt-4.1"
         aiAPI = defaults.string(forKey: "aiAPI") ?? "chat"
         thinking = defaults.string(forKey: "thinking") ?? "provider-default"

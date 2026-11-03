@@ -25,14 +25,13 @@ struct SettingsView: View {
                 }.pickerStyle(.navigationLink)
             } header: { Text("Learning") } footer: { Text("Words at or above this level are marked. Each transcript can override it. Changes apply to new imports; use the reader’s level menu for existing transcripts.") }
             Section {
-                NavigationLink { providerForm } label: { row("Provider", value: settings.host, symbol: "server.rack", color: .indigo) }
+                NavigationLink { providerForm } label: { row("Provider", value: settings.baseURL, symbol: "server.rack", color: .indigo) }
                 NavigationLink {
                     Form { TextField("Model", text: $settings.model).textInputAutocapitalization(.never).autocorrectionDisabled() }.navigationTitle("Model")
                 } label: { row("Model", value: settings.model, symbol: "cpu", color: .indigo) }
                 Picker(selection: $settings.thinking) {
                     ForEach(ThinkingLevel.allCases, id: \.rawValue) { Text($0.label).tag($0.rawValue) }
                 } label: { Label { Text("Thinking Level") } icon: { SettingsIcon(symbol: "brain", color: .indigo) } }.pickerStyle(.navigationLink)
-                NavigationLink { apiKeyForm } label: { row("API Key", value: key.isEmpty ? "Not Set" : "In Keychain", symbol: "key", color: .indigo) }
                 Button { Task { await testConnection() } } label: {
                     HStack { SettingsIcon(symbol: "cable.connector", color: .cyan); Text("Test Connection"); Spacer(); if testing { ProgressView() } }
                 }.disabled(testing)
@@ -78,20 +77,19 @@ struct SettingsView: View {
             Section {
                 Toggle("Enable AI Analysis", isOn: $settings.aiConsent)
                 Picker("API", selection: $settings.aiAPI) { ForEach(AIProviderAPI.allCases, id: \.rawValue) { Text($0.label).tag($0.rawValue) } }
-                LabeledContent("Hostname") { TextField("api.openai.com", text: $settings.host).multilineTextAlignment(.trailing).textInputAutocapitalization(.never).autocorrectionDisabled() }
-                LabeledContent("Base Path") { TextField("/v1", text: $settings.basePath).multilineTextAlignment(.trailing).textInputAutocapitalization(.never).autocorrectionDisabled() }
-            } footer: { Text("When enabled, imported transcripts and selected sentences are sent to your configured provider for analysis. Your API key stays in this device’s Keychain. Provider charges may apply. Thinking Level controls reasoning effort, not visible chain-of-thought. Use Provider Default for models without configurable reasoning; supported levels vary and higher levels can cost more or take longer. AI output, including pronunciation, can be inaccurate.") }
-        }.navigationTitle("Provider")
-    }
-    private var apiKeyForm: some View {
-        Form {
-            SecureField("API Key", text: $key).textInputAutocapitalization(.never).autocorrectionDisabled()
-            Button("Save API Key", systemImage: "key") {
-                do { let value = key.trimmingCharacters(in: .whitespacesAndNewlines); try APIKey.save(value); key = value; keyStatus = value.isEmpty ? "API key removed" : "Saved in Keychain" }
-                catch { keyStatus = error.localizedDescription }
+                VStack(alignment: .leading) {
+                    Text("Base URL")
+                    TextField("https://api.openai.com/v1", text: $settings.baseURL)
+                        .keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled().accessibilityLabel("Base URL")
+                }
+                SecureField("API Key", text: $key).textInputAutocapitalization(.never).autocorrectionDisabled()
+                Button("Save API Key", systemImage: "key") {
+                    do { let value = key.trimmingCharacters(in: .whitespacesAndNewlines); try APIKey.save(value); key = value; keyStatus = value.isEmpty ? "API key removed" : "Saved in Keychain" }
+                    catch { keyStatus = error.localizedDescription }
+                }
+                if !keyStatus.isEmpty { Text(keyStatus).font(.footnote).foregroundStyle(.secondary) }
             }
-            if !keyStatus.isEmpty { Text(keyStatus).font(.footnote).foregroundStyle(.secondary) }
-        }.navigationTitle("API Key")
+        }.navigationTitle("Provider")
     }
     private var audioForm: some View {
         Form {

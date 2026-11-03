@@ -11,7 +11,7 @@ let package = Package(
     ],
     targets: [
         .target(name: "PodcastCore", dependencies: ["Alamofire"], resources: [.copy("Resources/wordlist.json")]),
-        .target(name: "PodcastAI", dependencies: ["PodcastCore", .product(name: "SwiftAISDK", package: "swift-ai-sdk"), .product(name: "OpenAIProvider", package: "swift-ai-sdk")]),
+        .target(name: "PodcastAI", dependencies: ["PodcastCore", .product(name: "SwiftAISDK", package: "swift-ai-sdk"), .product(name: "OpenAIProvider", package: "swift-ai-sdk"), .product(name: "AnthropicProvider", package: "swift-ai-sdk"), .product(name: "GoogleProvider", package: "swift-ai-sdk")]),
         .testTarget(name: "PodcastAITests", dependencies: ["PodcastAI", .product(name: "AISDKProviderUtils", package: "swift-ai-sdk")]),
         .testTarget(name: "PodcastCoreTests", dependencies: ["PodcastCore"], resources: [.copy("Fixtures")]),
         .testTarget(name: "LiveProviderTests", dependencies: [

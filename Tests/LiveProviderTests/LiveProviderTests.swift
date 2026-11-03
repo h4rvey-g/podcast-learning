@@ -30,7 +30,9 @@ private struct LiveCredentials: Decodable {
         switch provider {
         case "OpenAIProvider", "responses": aiAPI = .responses
         case "OpenAICompatibleProvider", "chat": aiAPI = .chat
-        default: throw LiveCheckError("Use OpenAIProvider (Responses) or OpenAICompatibleProvider (Chat) for aiProvider.")
+        case "AnthropicProvider", "anthropic": aiAPI = .anthropic
+        case "GoogleProvider", "gemini": aiAPI = .gemini
+        default: throw LiveCheckError("Use responses, chat, anthropic, or gemini for aiProvider.")
         }
         let effort = try c.decodeIfPresent(String.self, forKey: .thinking) ?? "provider-default"
         guard let level = ThinkingLevel(rawValue: effort) else { throw LiveCheckError("Set thinking to provider-default, none, minimal, low, medium, high, xhigh, or max.") }
@@ -192,6 +194,20 @@ func bilibiliDownloadsAndTranscribesTimedAudio() async throws {
     let credentials = try JSONDecoder().decode(LiveCredentials.self, from: current)
     try credentials.validateAI(); try credentials.validateAzure()
     #expect(credentials.thinking == .medium && credentials.aiAPI == .responses)
+    for (provider, api, url, model) in [
+        ("AnthropicProvider", AIProviderAPI.anthropic, "https://api.anthropic.com/v1", "claude-sonnet-4-6"),
+        ("anthropic", .anthropic, "https://api.anthropic.com/v1", "claude-sonnet-4-6"),
+        ("GoogleProvider", .gemini, "https://generativelanguage.googleapis.com/v1beta", "gemini-2.5-flash"),
+        ("gemini", .gemini, "https://generativelanguage.googleapis.com/v1beta", "gemini-2.5-flash")
+    ] {
+        let data = Data(String(decoding: current, as: UTF8.self)
+            .replacingOccurrences(of: "OpenAIProvider", with: provider)
+            .replacingOccurrences(of: "https://api.openai.com/v1", with: url)
+            .replacingOccurrences(of: "gpt-6.1", with: model).utf8)
+        let native = try JSONDecoder().decode(LiveCredentials.self, from: data)
+        try native.validateAI()
+        #expect(native.aiAPI == api)
+    }
     let legacy = Data(#"{"azureSpeechEndpoint":"https://study.cognitiveservices.azure.com","azureSpeechKey":"test-key","aiHost":"api.openai.com","aiBasePath":"/v1","aiModel":"gpt-4.1","aiKey":"test-key"}"#.utf8)
     let previous = try JSONDecoder().decode(LiveCredentials.self, from: legacy)
     try previous.validateAI(); try previous.validateAzure()
