@@ -84,13 +84,18 @@ struct DictationView: View {
                 if answered { ForEach(paragraph.items) { answerFeedback($0) } }
                 if !answered {
                     Text(secondTry ? "Fill the underscores in the paragraph. Given letters stay fixed." : "Tap a blank and type in the paragraph. Check all blanks together.").font(.footnote).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading)
-                    PrimaryButton(title: secondTry ? "Check Again" : "Check") { submit(reveal: false) }.disabled(!canCheck)
-                    Button("Reveal Remaining Answers") { submit(reveal: true) }.font(.subheadline).frame(minHeight: 44)
                 }
             }.padding(16)
         }.scrollDismissesKeyboard(.interactively)
             .safeAreaInset(edge: .bottom) {
                 if answered { PrimaryButton(title: index == queue.count - 1 ? "Finish Session" : "Next Paragraph", symbol: "arrow.right") { next() }.padding(16) }
+                else {
+                    VStack(spacing: 6) {
+                        PrimaryButton(title: secondTry ? "Check Again" : "Check") { submit(reveal: false) }.disabled(!canCheck)
+                        // Kept above the keyboard so giving up mid-paragraph never needs a scroll.
+                        Button("Reveal Remaining Answers", systemImage: "eye") { submit(reveal: true) }.font(.subheadline).frame(minHeight: 44)
+                    }.padding(16)
+                }
             }
     }
     @ViewBuilder private func answerFeedback(_ item: DictationItem) -> some View {

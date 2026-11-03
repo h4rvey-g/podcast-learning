@@ -349,3 +349,16 @@ import Testing
     attempt.restore([word.id: .firstTry])
     #expect(attempt.grade(word.id) == .secondTry)
 }
+
+@MainActor @Test func paragraphRevealWorksInEitherTry() {
+    let sentence = Sentence(index: 0, text: "The music felt profoundly different.")
+    let word = DictationItem(text: "profoundly", key: "profoundly", sentence: sentence)
+    var first = ParagraphAttempt()
+    #expect(first.check([:], items: [word], reveal: true)[word.id] == .revealed)
+    #expect(first.phase(word.id) == .answered(.revealed))
+    var second = ParagraphAttempt()
+    #expect(second.check([word.id: "profund"], items: [word])[word.id] == nil)
+    #expect(second.phase(word.id) == .second)
+    #expect(second.check([:], items: [word], reveal: true)[word.id] == .revealed)
+    #expect(second.inputs(word.id) == ["profund"])
+}
