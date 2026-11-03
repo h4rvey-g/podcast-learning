@@ -8,7 +8,9 @@ import PodcastCore
     var position: Double = 0
     var duration: Double = 0
     var segmentID: UUID?
+    private(set) var activeSegmentID: UUID?
     var transcriptID: UUID?
+    private var audioTranscript: Transcript?
     var speechProgress: Double = 0
     var speed: Float = 1
     private var utterance: AVSpeechUtterance?
@@ -28,9 +30,16 @@ import PodcastCore
             Task { @MainActor in
                 guard let self, !self.seeking, self.utterance == nil else { return }
                 let time = self.player.currentTime().seconds
-                self.position = time.isFinite ? time : 0
+                // Only publish real changes: a paused player still fires this observer.
+                let newPosition = time.isFinite ? time : 0
+                if self.position != newPosition { self.position = newPosition }
                 let total = self.player.currentItem?.duration.seconds ?? 0
-                self.duration = total.isFinite ? total : 0
+                let newDuration = total.isFinite ? total : 0
+                if self.duration != newDuration { self.duration = newDuration }
+                if self.segmentID == nil, let transcript = self.audioTranscript {
+                    let id = ClipPlayer.segmentID(at: newPosition, in: transcript)
+                    if self.activeSegmentID != id { self.activeSegmentID = id }
+                }
                 if self.player.currentItem?.status == .failed {
                     self.error = "Audio playback failed. Try downloading this episode again."
                     self.isPlaying = false
@@ -63,6 +72,8 @@ import PodcastCore
             if currentURL != url { player.replaceCurrentItem(with: AVPlayerItem(url: url)); currentURL = url; position = 0 }
             let start = startAt ?? (clip ? max(0, (range?.start ?? 0) - 0.3) : position)
             position = start
+            audioTranscript = transcript
+            activeSegmentID = segment?.id ?? ClipPlayer.segmentID(at: start, in: transcript)
             let request = playbackRequest
             if clip, let end = range?.end {
                 boundary = player.addBoundaryTimeObserver(forTimes: [NSValue(time: CMTime(seconds: end + 0.3, preferredTimescale: 600))], queue: .main) { [weak self] in
@@ -82,19 +93,25 @@ import PodcastCore
             let utterance = AVSpeechUtterance(string: text)
             utterance.voice = settings.speechVoice
             self.utterance = utterance; speechTranscript = clip ? nil : transcript
+            audioTranscript = nil
+            activeSegmentID = segment?.id
             utterance.rate = Float(settings.rate); speech.speak(utterance); isPlaying = true
         }
+    }
+    private static func segmentID(at time: Double, in transcript: Transcript) -> UUID? {
+        transcript.orderedSegments.first { segment in
+            guard let start = segment.start, let end = segment.end else { return false }
+            return time >= start && time < end
+        }?.id
     }
     func toggle(text: String, transcript: Transcript, settings: SettingsStore) {
         if transcriptID == transcript.id && (isPlaying || speech.isPaused || player.currentItem != nil) { toggleCurrent() }
         else { play(text: text, transcript: transcript, settings: settings, clip: false) }
     }
+    // Reads cached state only: the reader's rows must not depend on the 10 Hz position tick.
     func isActive(_ segment: Segment, in transcript: Transcript) -> Bool { isPlaying && isCurrent(segment, in: transcript) }
     private func isCurrent(_ segment: Segment, in transcript: Transcript) -> Bool {
-        guard transcriptID == transcript.id else { return false }
-        if let segmentID { return segmentID == segment.id }
-        guard utterance == nil, let start = segment.start, let end = segment.end else { return false }
-        return position >= start && position < end
+        transcriptID == transcript.id && activeSegmentID == segment.id
     }
     func toggleParagraph(_ segment: Segment, transcript: Transcript, settings: SettingsStore) {
         if isCurrent(segment, in: transcript) { toggleCurrent() }
@@ -132,7 +149,7 @@ import PodcastCore
     func stop() {
         playbackRequest = UUID(); seeking = false
         player.pause(); utterance = nil; speechTranscript = nil; speech.stopSpeaking(at: .immediate); isPlaying = false
-        segmentID = nil; transcriptID = nil; speechProgress = 0
+        segmentID = nil; activeSegmentID = nil; audioTranscript = nil; transcriptID = nil; speechProgress = 0
         if let boundary { player.removeTimeObserver(boundary); self.boundary = nil }
     }
     nonisolated func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
@@ -141,7 +158,7 @@ import PodcastCore
     nonisolated func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, willSpeakRangeOfSpeechString range: NSRange, utterance: AVSpeechUtterance) {
         Task { @MainActor in
             guard self.utterance === utterance else { return }
-            if let segment = self.speechTranscript?.segment(atSpeechOffset: range.location) { self.segmentID = segment.id }
+            if let segment = self.speechTranscript?.segment(atSpeechOffset: range.location) { self.segmentID = segment.id; self.activeSegmentID = segment.id }
             self.speechProgress = Double(range.location + range.length) / Double(max(1, utterance.speechString.utf16.count))
         }
     }

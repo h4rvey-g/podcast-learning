@@ -18,6 +18,7 @@ struct ReaderView: View {
     @State private var practice = false
     @State private var showVideo = false
     @State private var includeMastered = false
+    @State private var dictationSession: DictationSession?
     var body: some View {
         VStack(spacing: 12) {
             HStack(spacing: 12) {
@@ -56,7 +57,10 @@ struct ReaderView: View {
                                     }.font(.footnote).foregroundStyle(.secondary).frame(minHeight: 36)
                                 }.buttonStyle(.plain).accessibilityLabel("\(player.isActive(segment, in: transcript) ? "Pause" : "Play") \(segment.speaker ?? "paragraph")")
                                 ForEach(segment.orderedSentences) { sentence in
-                                    HighlightedText(sentence: sentence, items: transcript.activeItems) { word in selection = .word(word, sentence) }
+                                    HighlightedText(sentence: sentence, items: transcript.activeItems) { word in
+                                        // A long press already opened the paragraph sheet for this touch.
+                                        if selection == nil { selection = .word(word, sentence) }
+                                    }
                                         .padding(sentence.isKey ? 10 : 0)
                                         .frame(maxWidth: .infinity, alignment: .leading)
                                         .background(sentence.isKey ? Palette.key : .clear, in: RoundedRectangle(cornerRadius: 9))
@@ -95,7 +99,7 @@ struct ReaderView: View {
             VStack(spacing: 10) {
                 if transcript.transcriptionState == "none" || transcript.transcriptionState == "done" { AudioDownloadStatus(transcript: transcript) }
                 if tab == 0 && !transcript.orderedSegments.isEmpty { PlaybackBar(transcript: transcript) }
-                PrimaryButton(title: "Start Dictation", symbol: "pencil.line") { player.stop(); practice = true }
+                PrimaryButton(title: dictationTitle, symbol: "pencil.line") { player.stop(); practice = true }
                     .disabled(transcript.activeItems.isEmpty).opacity(transcript.activeItems.isEmpty ? 0.5 : 1)
             }.padding(.horizontal, 16).padding(.bottom, 8)
         }
@@ -108,9 +112,15 @@ struct ReaderView: View {
         .sheet(isPresented: $showVideo) {
             if let file = try? AudioStore.videoFile(transcript.id) { DownloadedVideoView(url: file) }
         }
-        .fullScreenCover(isPresented: $practice) { DictationView(transcript: transcript, includeMastered: includeMastered) }
+        .fullScreenCover(isPresented: $practice, onDismiss: loadDictationSession) { DictationView(transcript: transcript, includeMastered: includeMastered) }
+        .task { loadDictationSession() }
         .onDisappear { player.stop(); store.save() }
     }
+    private var dictationTitle: String {
+        guard let session = dictationSession, session.answeredCount > 0, !session.isFinished else { return "Start Dictation" }
+        return "Continue Dictation (\(session.answeredCount)/\(session.wordCount))"
+    }
+    private func loadDictationSession() { dictationSession = DictationSessionStore.load(for: transcript.id) }
     @ViewBuilder private var transcriptionStatus: some View {
         if transcript.transcriptionState == "pending" {
             VStack(alignment: .leading, spacing: 10) {

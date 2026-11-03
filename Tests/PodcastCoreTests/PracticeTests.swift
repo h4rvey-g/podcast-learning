@@ -278,3 +278,74 @@ import Testing
     #expect(attempt.check([word.id: "time"], items: remaining) == [word.id: .firstTry])
     #expect(attempt.inputs(phrase.id) == ["keeping time"])
 }
+
+@MainActor @Test func libraryRemovalCascadesWithoutDeletingGlobalReviewsOrOtherTranscripts() throws {
+    let container = try testContainer(), context = container.mainContext
+    let removed = TextImporter.makeTranscript(title: "Remove me", paragraphs: ["Music matters."])
+    let kept = TextImporter.makeTranscript(title: "Keep me", paragraphs: ["Music helps."])
+    let item = DictationItem(text: "Music", key: "music", sentence: removed.sentences.first)
+    removed.items = [item]
+    let memory = WordMemory(key: "music"); memory.box = 4; memory.attempts = 7
+    context.insert(removed); context.insert(kept); context.insert(memory)
+    try context.save()
+    #expect(removed.modelContext != nil)
+
+    context.delete(removed)
+    try context.save()
+
+    // Async import/analysis completions use this to avoid writing to a removed model.
+    #expect(removed.modelContext == nil)
+    #expect(try context.fetch(FetchDescriptor<Transcript>()).map(\.title) == ["Keep me"])
+    #expect(try context.fetchCount(FetchDescriptor<Segment>()) == kept.orderedSegments.count)
+    #expect(try context.fetchCount(FetchDescriptor<Sentence>()) == kept.sentences.count)
+    #expect(try context.fetchCount(FetchDescriptor<DictationItem>()) == 0)
+    #expect(try context.fetchCount(FetchDescriptor<WordMemory>()) == 1)
+    #expect(memory.box == 4 && memory.attempts == 7)
+}
+
+@Test func dictationSessionCountsWordsAndDetectsFinish() {
+    let a = UUID(), b = UUID(), c = UUID()
+    let session = DictationSession(paragraphs: [[a, b], [c]], grades: [a: .firstTry, b: .revealed])
+    #expect(session.wordCount == 3)
+    #expect(session.answeredCount == 2)
+    #expect(!session.isFinished)
+    #expect(DictationSession(paragraphs: [[a]], grades: [a: .secondTry, UUID(): .revealed]).answeredCount == 1)
+    #expect(DictationSession(paragraphs: [[a]], grades: [a: .secondTry]).isFinished)
+    #expect(DictationSession(paragraphs: [], grades: [:]).isFinished)
+}
+
+@Test func dictationSessionSavesResumesAndClearsPerTranscript() throws {
+    let name = "podlearn.dictation.\(UUID().uuidString)"
+    let defaults = try #require(UserDefaults(suiteName: name))
+    defer { defaults.removePersistentDomain(forName: name) }
+    let transcriptID = UUID(), other = UUID()
+    let ids = [UUID(), UUID(), UUID()]
+    let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
+    let session = DictationSession(paragraphs: [[ids[0], ids[1]], [ids[2]]], grades: [ids[0]: .firstTry], startedAt: startedAt)
+
+    #expect(DictationSessionStore.load(for: transcriptID, defaults: defaults) == nil)
+    DictationSessionStore.save(session, for: transcriptID, defaults: defaults)
+    let loaded = try #require(DictationSessionStore.load(for: transcriptID, defaults: defaults))
+    #expect(loaded == session)
+    #expect(loaded.answeredCount == 1 && loaded.wordCount == 3)
+    #expect(DictationSessionStore.load(for: other, defaults: defaults) == nil)
+
+    DictationSessionStore.clear(for: transcriptID, defaults: defaults)
+    #expect(DictationSessionStore.load(for: transcriptID, defaults: defaults) == nil)
+
+    defaults.set(Data("not a session".utf8), forKey: "dictationSession.\(transcriptID.uuidString)")
+    #expect(DictationSessionStore.load(for: transcriptID, defaults: defaults) == nil)
+}
+
+@MainActor @Test func restoredGradesKeepAnsweredWordsOutOfTheEditableSet() {
+    let word = DictationItem(text: "ability", key: "ability", sentence: Sentence(index: 0, text: "Reading ability improves."))
+    var attempt = ParagraphAttempt()
+    attempt.restore([word.id: .secondTry])
+    #expect(attempt.grade(word.id) == .secondTry)
+    #expect(attempt.phase(word.id) == .answered(.secondTry))
+    #expect(attempt.grade(UUID()) == nil)
+    #expect(attempt.phase(UUID()) == .first)
+    #expect(attempt.inputs(word.id).isEmpty)
+    attempt.restore([word.id: .firstTry])
+    #expect(attempt.grade(word.id) == .secondTry)
+}

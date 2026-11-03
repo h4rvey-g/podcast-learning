@@ -255,7 +255,7 @@ import PodcastCore
         save()
     }
     func consumeSharedImports() async {
-        guard !importing, let group = Bundle.main.object(forInfoDictionaryKey: "AppGroupIdentifier") as? String,
+        guard !importing, let group = PendingImport.appGroupIdentifier(in: Bundle.main),
               let container = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: group) else { return }
         let directory = container.appendingPathComponent("PendingImports")
         guard let files = try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil) else { return }

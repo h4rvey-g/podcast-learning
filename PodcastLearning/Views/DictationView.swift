@@ -53,7 +53,7 @@ struct DictationView: View {
                         ToolbarItem(placement: .topBarTrailing) { Text("\(min(index + 1, queue.count)) of \(queue.count)").accessibilityLabel("Paragraph \(min(index + 1, queue.count)) of \(queue.count)").font(.subheadline).foregroundStyle(.secondary).monospacedDigit() }
                     }
                 }
-                .confirmationDialog("End this session? Completed answers are saved.", isPresented: $exitConfirmation, titleVisibility: .visible) { Button("End Session", role: .destructive) { dismiss() }; Button("Keep Practicing", role: .cancel) {} }
+                .confirmationDialog("End this session? Your answers are saved so you can continue later.", isPresented: $exitConfirmation, titleVisibility: .visible) { Button("End Session", role: .destructive) { dismiss() }; Button("Keep Practicing", role: .cancel) {} }
                 .alert("Could Not Save Review", isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) { Button("Close", role: .cancel) { error = nil } } message: { Text(error ?? "") }
         }
         .task { if !loaded { setup(includeMastered: includeMastered) } }
@@ -180,10 +180,32 @@ struct DictationView: View {
     private func setup(includeMastered: Bool) {
         do {
             memories = try Leitner.memories(in: store.context)
-            queue = Leitner.queue(transcript.activeItems, memories: memories, includeMastered: includeMastered)
-            try store.context.save(); loaded = true; focusFirstUnfinished()
-            if let current { replay(current) }
+            if let saved = DictationSessionStore.load(for: transcript.id), let resumed = resume(saved) {
+                queue = resumed.paragraphs; results = resumed.results; index = resumed.index; sessionStartedAt = saved.startedAt
+                attempt.restore(saved.grades)
+            } else {
+                queue = Leitner.queue(transcript.activeItems, memories: memories, includeMastered: includeMastered)
+                try store.context.save()
+            }
+            loaded = true; focusFirstUnfinished()
+            if let current { replay(current) } else { player.stop() }
         } catch { self.error = error.localizedDescription }
+    }
+    private func resume(_ saved: DictationSession) -> (paragraphs: [PracticeParagraph], results: [PracticeResult], index: Int)? {
+        let items = Dictionary(transcript.activeItems.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let paragraphs = saved.paragraphs.compactMap { ids -> PracticeParagraph? in
+            let found = ids.compactMap { items[$0] }
+            return found.isEmpty ? nil : PracticeParagraph(items: found)
+        }
+        guard !paragraphs.isEmpty else { return nil }
+        let results = paragraphs.flatMap(\.items).compactMap { item in saved.grades[item.id].map { PracticeResult(item: item, grade: $0) } }
+        let index = paragraphs.firstIndex { $0.items.contains { saved.grades[$0.id] == nil } } ?? paragraphs.count
+        return (paragraphs, results, index)
+    }
+    private func saveSession() {
+        var grades: [UUID: PracticeGrade] = [:]
+        for result in results { grades[result.item.id] = result.grade }
+        DictationSessionStore.save(DictationSession(paragraphs: queue.map { $0.items.map(\.id) }, grades: grades, startedAt: sessionStartedAt), for: transcript.id)
     }
     private func submit(reveal: Bool) {
         guard let paragraph = current, !answered, reveal || canCheck else { return }
@@ -203,13 +225,14 @@ struct DictationView: View {
             try store.context.save(); memories = updated
             results += paragraph.items.compactMap { item in grades[item.id].map { PracticeResult(item: item, grade: $0) } }
             for item in paragraph.items where attempt.phase(item.id) == .second && retries[item.id] == nil { retries[item.id] = RetryLetters(answer: item.text) }
+            saveSession()
             focusFirstUnfinished()
             if !answered { replay(paragraph) }
         } catch { store.context.rollback(); attempt = previous; self.error = error.localizedDescription }
     }
     private func next() {
         index += 1; inputs = [:]; retries = [:]; attempt = ParagraphAttempt()
-        if index >= queue.count { completedAt = Date() }
+        if index >= queue.count { completedAt = Date(); DictationSessionStore.clear(for: transcript.id) }
         focusFirstUnfinished()
         if let current { replay(current) } else { player.stop() }
     }

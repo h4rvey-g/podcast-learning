@@ -63,6 +63,10 @@ struct WordSheet: View {
                 }.foregroundStyle(.primary).disabled(item == nil)
             }.font(.headline).buttonStyle(.plain).padding(20)
         }
+        .task {
+            guard translation.isEmpty, configuration == nil, (details?.glossZh ?? item?.glossZh ?? "").isEmpty else { return }
+            configuration = .init(source: .init(identifier: "en"), target: .init(identifier: "zh-Hans"))
+        }
         .translationTask(configuration) { session in
             do {
                 let result = try await session.translate(word); translation = result.targetText
@@ -113,10 +117,14 @@ struct SentenceSheet: View {
                         Button(explanation.isEmpty && sentence.keyNoteZh == nil ? "Generate" : "Regenerate", systemImage: "arrow.clockwise") { Task { await explain() } }.foregroundStyle(.secondary).disabled(busy)
                     }.font(.footnote.weight(.semibold))
                     if busy { ProgressView("Explaining…") }
-                    if let text = explanation.isEmpty ? sentence.keyNoteZh : explanation { Text(text).font(.callout).textSelection(.enabled) }
+                    if let text = explanation.isEmpty ? sentence.keyNoteZh : explanation { MarkdownText(text: text) }
                 }.card(fill: Palette.background)
                 if let error { Text(error).font(.footnote).foregroundStyle(.red) }
             }.padding(20).padding(.top, 10)
+        }
+        .task {
+            guard translation.isEmpty, configuration == nil else { return }
+            configuration = .init(source: .init(identifier: "en"), target: .init(identifier: "zh-Hans"))
         }
         .translationTask(configuration) { session in
             do { translation = try await session.translate(sentence.text).targetText }

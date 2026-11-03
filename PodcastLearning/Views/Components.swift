@@ -23,6 +23,7 @@ struct PrimaryButton: View {
         Button(action: action) {
             HStack { if let symbol { Image(systemName: symbol) }; Text(title) }
                 .font(.headline).frame(maxWidth: .infinity).padding(.vertical, 15)
+                .contentShape(Capsule())
         }.buttonStyle(.plain).foregroundStyle(Palette.onAccent).background(Palette.accent, in: Capsule())
     }
 }
@@ -228,3 +229,26 @@ struct SettingsIcon: View {
     }
 }
 
+/// Renders an AI answer's markdown (headings, bullets, numbered steps, inline bold/code) as SwiftUI text.
+struct MarkdownText: View {
+    let text: String
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(Array(Markdown.blocks(text).enumerated()), id: \.offset) { _, block in
+                switch block {
+                case .heading(let level, let text):
+                    Text(inline(text)).font(level <= 2 ? .headline : .subheadline.weight(.semibold)).padding(.top, 2)
+                case .bullet(let text):
+                    HStack(alignment: .firstTextBaseline, spacing: 8) { Text("•").foregroundStyle(Palette.accent); Text(inline(text)) }
+                case .numbered(let marker, let text):
+                    HStack(alignment: .firstTextBaseline, spacing: 8) { Text(marker).foregroundStyle(Palette.accent).monospacedDigit(); Text(inline(text)) }
+                case .paragraph(let text):
+                    Text(inline(text))
+                }
+            }
+        }.font(.callout).textSelection(.enabled)
+    }
+    private func inline(_ text: String) -> AttributedString {
+        (try? AttributedString(markdown: text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace, failurePolicy: .returnPartiallyParsedIfPossible))) ?? AttributedString(text)
+    }
+}

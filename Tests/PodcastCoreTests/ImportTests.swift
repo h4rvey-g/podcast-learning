@@ -38,6 +38,74 @@ import Testing
     #expect(decoded.text == pending.text && decoded.fileExtension == "srt" && decoded.title == "Test")
 }
 
+@Test func sharedImportAppGroupSupportsSideStoreResigning() {
+    let configured = "group.com.example.PodcastLearning"
+    #expect(PendingImport.appGroupIdentifier(in: ["AppGroupIdentifier": configured]) == configured)
+    #expect(PendingImport.appGroupIdentifier(in: [
+        "AppGroupIdentifier": configured,
+        "ALTAppGroups": ["group.unrelated.TEAM123", configured + ".TEAM123"]
+    ]) == configured + ".TEAM123")
+    #expect(PendingImport.appGroupIdentifier(in: [
+        "AppGroupIdentifier": configured, "ALTAppGroups": ["group.unrelated.TEAM123"]
+    ]) == configured)
+    #expect(PendingImport.appGroupIdentifier(in: [:]) == nil)
+    #expect(PendingImport.appGroupIdentifier(in: ["AppGroupIdentifier": ""]) == nil)
+}
+
+@Test func sharedImportUsesProvisionedGroupWithoutInstallerMetadata() throws {
+    let configured = "group.com.howieguo8.PodcastLearning"
+    let signedGroup = configured + ".Y77KRPY77N"
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let profile = try PropertyListSerialization.data(fromPropertyList: [
+        "Entitlements": ["com.apple.security.application-groups": [signedGroup]]
+    ], format: .xml, options: 0)
+    for (name, identifier) in [
+        ("App", "com.howieguo8.PodcastLearning.Y77KRPY77N"),
+        ("Extension", "com.howieguo8.PodcastLearning.Y77KRPY77N.Share")
+    ] {
+        let url = directory.appendingPathComponent(name + ".bundle")
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        let info: [String: Any] = ["CFBundleIdentifier": identifier, "AppGroupIdentifier": configured]
+        try PropertyListSerialization.data(fromPropertyList: info, format: .xml, options: 0)
+            .write(to: url.appendingPathComponent("Info.plist"))
+        try (Data([0x30, 0x82, 0xff, 0x00]) + profile + Data([0x00, 0xff]))
+            .write(to: url.appendingPathComponent("embedded.mobileprovision"))
+        let bundle = try #require(Bundle(url: url))
+        #expect(PendingImport.appGroupIdentifier(in: bundle) == signedGroup, "\(name) must use the provisioned group")
+    }
+    let staleInstallerInfo: [String: Any] = ["AppGroupIdentifier": configured, "ALTAppGroups": [configured + ".OLDTEAM"]]
+    #expect(PendingImport.appGroupIdentifier(in: staleInstallerInfo, provisioningProfile: profile) == signedGroup)
+    #expect(PendingImport.appGroupIdentifier(in: staleInstallerInfo, provisioningProfile: Data([0x00, 0xff])) == configured + ".OLDTEAM")
+    let unrelated = try PropertyListSerialization.data(fromPropertyList: [
+        "Entitlements": ["com.apple.security.application-groups": [configured + "Other.Y77KRPY77N"]]
+    ], format: .xml, options: 0)
+    #expect(PendingImport.appGroupIdentifier(in: ["AppGroupIdentifier": configured], provisioningProfile: unrelated) == configured)
+}
+
+@Test func sharedImportDiagnosticsReportOnlySigningIdentifiers() throws {
+    let configured = "group.com.example.PodcastLearning"
+    let signedGroup = configured + ".TEAM123"
+    let plist = try PropertyListSerialization.data(fromPropertyList: [
+        "Name": "PRIVATE_PROFILE_NAME", "ProvisionedDevices": ["PRIVATE_DEVICE_ID"],
+        "Entitlements": ["com.apple.security.application-groups": [signedGroup]]
+    ], format: .xml, options: 0)
+    let profile = Data([0x30, 0x82, 0xff, 0x00]) + plist + Data([0x00, 0xff])
+    let info: [String: Any] = ["AppGroupIdentifier": configured, "CFBundleIdentifier": "com.example.PodcastLearning.Share"]
+    let report = PendingImport.appGroupDiagnostics(in: info, provisioningProfile: profile)
+    #expect(report.contains("Share signing diagnostics 3"))
+    #expect(report.components(separatedBy: "\n").contains("Selected: " + signedGroup))
+    #expect(report.contains("Installer groups: none"))
+    #expect(report.contains("Profile groups: " + signedGroup))
+    #expect(!report.contains("PRIVATE_PROFILE_NAME") && !report.contains("PRIVATE_DEVICE_ID"))
+    #expect(PendingImport.appGroupDiagnostics(in: info, provisioningProfile: nil).contains("Profile groups: profile unavailable"))
+    #expect(PendingImport.appGroupDiagnostics(in: info, provisioningProfile: Data([0x00, 0xff])).contains("Profile groups: profile unreadable"))
+    let noGroups = try PropertyListSerialization.data(fromPropertyList: ["Entitlements": [String: String]()], format: .xml, options: 0)
+    #expect(PendingImport.appGroupDiagnostics(in: info, provisioningProfile: noGroups).contains("Profile groups: none"))
+    let installerInfo = info.merging(["ALTAppGroups": [signedGroup]]) { _, new in new }
+    #expect(PendingImport.appGroupDiagnostics(in: installerInfo, provisioningProfile: profile).contains("Installer groups: " + signedGroup))
+}
+
 private final class StubProtocol: URLProtocol, @unchecked Sendable {
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }

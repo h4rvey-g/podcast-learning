@@ -61,7 +61,7 @@ public struct RetryLetters: Equatable, Sendable {
     }
 }
 
-public enum PracticeGrade: Int, Sendable { case firstTry, secondTry, revealed }
+public enum PracticeGrade: Int, Sendable, Codable { case firstTry, secondTry, revealed }
 
 public enum Leitner {
     public static func nextBox(_ box: Int, grade: PracticeGrade) -> Int {
@@ -165,6 +165,10 @@ public struct DictationAttempt: Equatable, Sendable {
         if case .answered = phase { return nil }
         phase = .answered(.revealed); return .revealed
     }
+    public mutating func restore(_ grade: PracticeGrade) {
+        if case .answered = phase { return }
+        phase = .answered(grade)
+    }
 }
 
 @MainActor public struct PracticeParagraph {
@@ -208,6 +212,10 @@ public struct ParagraphAttempt: Equatable, Sendable {
     public func grade(_ id: UUID) -> PracticeGrade? {
         if case .answered(let grade) = phase(id) { return grade }; return nil
     }
+    /// Reapplies grades saved by an earlier session without recording them again.
+    public mutating func restore(_ grades: [UUID: PracticeGrade]) {
+        for (id, grade) in grades { attempts[id, default: DictationAttempt()].restore(grade) }
+    }
     @MainActor public mutating func check(_ inputs: [UUID: String], items: [DictationItem], reveal: Bool = false) -> [UUID: PracticeGrade] {
         let pending = items.filter { grade($0.id) == nil }
         guard reveal || pending.allSatisfy({ !(inputs[$0.id] ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) else { return [:] }
@@ -219,4 +227,30 @@ public struct ParagraphAttempt: Equatable, Sendable {
         }
         return grades
     }
+}
+
+/// Saved dictation progress for one transcript, so a session can be continued later.
+public struct DictationSession: Codable, Equatable, Sendable {
+    public let paragraphs: [[UUID]]
+    public let grades: [UUID: PracticeGrade]
+    public let startedAt: Date
+    public init(paragraphs: [[UUID]], grades: [UUID: PracticeGrade], startedAt: Date = Date()) {
+        self.paragraphs = paragraphs; self.grades = grades; self.startedAt = startedAt
+    }
+    public var wordCount: Int { paragraphs.reduce(0) { $0 + $1.count } }
+    public var answeredCount: Int { min(grades.count, wordCount) }
+    public var isFinished: Bool { answeredCount >= wordCount }
+}
+
+public enum DictationSessionStore {
+    private static func key(_ transcriptID: UUID) -> String { "dictationSession.\(transcriptID.uuidString)" }
+    public static func load(for transcriptID: UUID, defaults: UserDefaults = .standard) -> DictationSession? {
+        guard let data = defaults.data(forKey: key(transcriptID)) else { return nil }
+        return try? JSONDecoder().decode(DictationSession.self, from: data)
+    }
+    public static func save(_ session: DictationSession, for transcriptID: UUID, defaults: UserDefaults = .standard) {
+        guard let data = try? JSONEncoder().encode(session) else { return }
+        defaults.set(data, forKey: key(transcriptID))
+    }
+    public static func clear(for transcriptID: UUID, defaults: UserDefaults = .standard) { defaults.removeObject(forKey: key(transcriptID)) }
 }
