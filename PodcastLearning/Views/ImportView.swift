@@ -21,22 +21,25 @@ struct ImportView: View {
     @State private var findingAudio = false
     @State private var audioMessage: String?
     @State private var previewRevision = 0
+    private var isBilibili: Bool { (try? BilibiliLink(input)) != nil }
+    private var validLink: Bool { isBilibili || (try? EpisodeLink(input)) != nil }
     var body: some View {
         NavigationStack {
             Form {
-                Section { Picker("Input", selection: $mode) { Text("Podcast Link").tag(0); Text("Text").tag(1); Text("File").tag(2) }.pickerStyle(.segmented).listRowInsets(EdgeInsets()).listRowBackground(Color.clear) }
+                Section { Picker("Input", selection: $mode) { Text("Link").tag(0); Text("Text").tag(1); Text("File").tag(2) }.pickerStyle(.segmented).listRowInsets(EdgeInsets()).listRowBackground(Color.clear) }
                 if mode == 0 {
                     Section {
                         HStack {
                             Image(systemName: "link").foregroundStyle(.secondary)
-                            TextField("https://podcasts.apple.com/…?i=…", text: $input).keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
+                            TextField("Apple Podcasts or Bilibili URL", text: $input).keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
                             if !input.isEmpty { Button("Clear Link", systemImage: "xmark.circle.fill") { input = "" }.labelStyle(.iconOnly).foregroundStyle(.secondary).buttonStyle(.borderless).frame(minWidth: 44, minHeight: 44) }
                         }
-                    } header: { Text("Apple Podcasts Episode") } footer: {
+                    } header: { Text("Apple Podcasts or Bilibili") } footer: {
                         VStack(alignment: .leading, spacing: 8) {
-                            Text("In Podcasts, tap Share › Learn to import without copying the link. The episode link is sent to PodText to retrieve its transcript.")
-                            if !input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && (try? EpisodeLink(input)) == nil {
-                                Text("Use an Apple Podcasts episode link containing ?i=…, not a show link.").foregroundStyle(.red)
+                            Text("Apple Podcasts links retrieve transcripts via PodText. Bilibili audio posts (au) and videos (BV/av, including ?p=; b23.tv share links also work) download audio for Microsoft MAI-Transcribe-2.")
+                            if isBilibili { Text("Audio is sent to your configured speech provider; charges may apply. Keep Learn open for transfers. Interrupted imports can be retried without losing downloaded audio.") }
+                            if !input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !validLink {
+                                Text("Use an Apple Podcasts episode (?i=…) or a full bilibili.com/audio/au… or /video/BV… link, or a b23.tv share link.").foregroundStyle(.red)
                             }
                         }
                     }
@@ -59,7 +62,11 @@ struct ImportView: View {
                                     Text([preview.author, preview.duration.map(timestamp)].compactMap { $0 }.joined(separator: " · ")).font(.footnote).foregroundStyle(.secondary)
                                 }
                             }.padding(.vertical, 6)
-                            Label("Transcript found · \(preview.orderedSegments.count) segments", systemImage: "checkmark.circle").foregroundStyle(.green)
+                            Label(isBilibili ? "Audio ready · Transcript generated after import" : "Transcript found · \(preview.orderedSegments.count) segments", systemImage: "checkmark.circle").foregroundStyle(.green)
+                            if isBilibili {
+                                Text(settings.keepBilibiliVideo ? "Keep video on · Only audio is uploaded" : "Audio only · No video downloaded").foregroundStyle(.secondary)
+                                if !settings.transcriptionConsent { Text("Enable Audio Transcription in Settings first.").foregroundStyle(.red) }
+                            }
                             HStack(spacing: 8) {
                                 if findingAudio { ProgressView() } else { Image(systemName: preview.remoteAudioURL == nil ? "speaker.wave.2" : "checkmark.circle").foregroundStyle(.secondary) }
                                 Text(findingAudio ? "Looking for the episode audio…" : audioMessage ?? "Episode audio found").foregroundStyle(.secondary)
@@ -73,6 +80,9 @@ struct ImportView: View {
                         Text("Use Global (\(settings.targetLevel))").tag("global")
                         ForEach(CEFR.allCases, id: \.rawValue) { Text($0.rawValue + " and above").tag($0.rawValue) }
                     }
+                }
+                if isBilibili && mode == 0 {
+                    Section { NavigationLink("Audio Transcription Settings") { TranscriptionSettingsView() } }
                 }
                 if busy { Section { HStack { ProgressView(); Text(mode == 0 ? "Fetching transcript…" : "Marking vocabulary…") } } }
                 if let error { Section { Label(error, systemImage: "exclamationmark.triangle").foregroundStyle(.red) } }
@@ -106,13 +116,15 @@ struct ImportView: View {
     }
     @MainActor private func loadPreview() async {
         preview = nil; audioMessage = nil; error = nil; previewing = false; findingAudio = false
-        guard mode == 0, (try? EpisodeLink(input)) != nil else { return }
+        guard mode == 0, validLink else { return }
         do {
             try await Task.sleep(for: .milliseconds(500)); try Task.checkCancellation()
             previewing = true
-            let fetched = try await store.podcastPreview(input)
+            let fetched = isBilibili ? try await store.bilibiliPreview(input) : try await store.podcastPreview(input)
             try Task.checkCancellation()
-            preview = fetched; previewing = false; findingAudio = true
+            preview = fetched; previewing = false
+            if isBilibili { audioMessage = "Bilibili audio found"; return }
+            findingAudio = true
             do {
                 let link = try EpisodeLink(input)
                 let audio = try await AudioResolver.resolve(link, title: fetched.title)
@@ -134,7 +146,8 @@ struct ImportView: View {
         defer { busy = false; store.importing = false }
         do {
             let transcript: Transcript
-            if mode == 0 { transcript = try await store.importPodcast(input, level: level == "global" ? nil : level, preview: preview) }
+            if mode == 0 && isBilibili { transcript = try await store.importBilibili(input, level: level == "global" ? nil : level, preview: preview) }
+            else if mode == 0 { transcript = try await store.importPodcast(input, level: level == "global" ? nil : level, preview: preview) }
             else { transcript = try store.importText(input, title: title, fileExtension: mode == 2 ? fileExtension : "txt", level: level == "global" ? nil : level) }
             dismiss(); onImported(transcript)
         } catch { self.error = error.localizedDescription }

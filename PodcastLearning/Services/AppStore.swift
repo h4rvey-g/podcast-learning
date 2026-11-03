@@ -13,11 +13,18 @@ import PodcastCore
     var downloadProgress: [UUID: Double] = [:]
     var audioErrors: [UUID: String] = [:]
     private var analyzing: Set<UUID> = []
+    var transcribing: Set<UUID> = []
+    var transcriptionProgress: [UUID: Double] = [:]
+    var transcriptionStatus: [UUID: String] = [:]
     init(context: ModelContext, settings: SettingsStore) throws {
         self.context = context; self.settings = settings; marker = try .bundled()
         for transcript in try context.fetch(FetchDescriptor<Transcript>()) where transcript.analysisState == "pending" {
             transcript.analysisState = "aiFailed"
             transcript.analysisError = "Analysis was interrupted. Retry when you are ready."
+        }
+        for transcript in try context.fetch(FetchDescriptor<Transcript>()) where transcript.transcriptionState == "pending" {
+            transcript.transcriptionState = "failed"
+            transcript.transcriptionError = "Transcription was interrupted. Downloaded audio and completed results are kept. Tap Retry Transcription."
         }
         try context.save()
     }
@@ -49,6 +56,104 @@ import PodcastCore
         Task { await downloadAudio(transcript) }
         return transcript
     }
+    func bilibiliPreview(_ input: String) async throws -> Transcript {
+        let media = try await BilibiliClient().resolve(BilibiliLink(input), includeVideo: settings.keepBilibiliVideo)
+        let transcript = Transcript(title: media.title, author: media.author)
+        transcript.episodeID = media.link.episodeID; transcript.sourceURL = media.link.url.absoluteString
+        transcript.coverURL = media.cover; transcript.audioDuration = media.duration
+        return transcript
+    }
+    func importBilibili(_ input: String, level: String? = nil, preview: Transcript? = nil) async throws -> Transcript {
+        let link = try await BilibiliClient().expand(BilibiliLink(input)), episodeID = link.episodeID
+        if let existing = try context.fetch(FetchDescriptor<Transcript>(predicate: #Predicate { $0.episodeID == episodeID })).first { return existing }
+        guard settings.transcriptionConsent else { throw ImportError.service("Enable Audio Transcription in Settings before importing from Bilibili.") }
+        _ = try MAITranscriber(endpoint: settings.speechEndpoint, key: APIKey.read(account: "azureSpeech"), model: settings.speechModel)
+        let transcript: Transcript
+        if let preview, preview.episodeID == episodeID { transcript = preview }
+        else { transcript = try await bilibiliPreview(input) }
+        if let existing = try context.fetch(FetchDescriptor<Transcript>(predicate: #Predicate { $0.episodeID == episodeID })).first { return existing }
+        transcript.targetLevelOverride = level; transcript.keepVideo = settings.keepBilibiliVideo && !link.isAudio
+        transcript.transcriptionState = "pending"
+        context.insert(transcript)
+        do { try context.save() } catch { context.delete(transcript); throw error }
+        Task { await transcribe(transcript) }
+        return transcript
+    }
+    func transcribe(_ transcript: Transcript) async {
+        guard transcript.orderedSegments.isEmpty, !downloading.contains(transcript.id), transcribing.insert(transcript.id).inserted else { return }
+        let id = transcript.id
+        downloadProgress[id] = nil; transcriptionProgress[id] = nil
+        defer { transcribing.remove(id); downloadProgress[id] = nil; transcriptionProgress[id] = nil; transcriptionStatus[id] = nil }
+        transcript.keepVideo = transcript.keepVideo && settings.keepBilibiliVideo
+        transcript.transcriptionState = "pending"; transcript.transcriptionError = nil
+        do {
+            try context.save()
+            guard settings.transcriptionConsent else { throw ImportError.service("Enable Audio Transcription in Settings to retry.") }
+            let directory = try AudioStore.workDirectory(id)
+            let resultFile = directory.appendingPathComponent("result.json")
+            let result: MAIResult
+            if FileManager.default.fileExists(atPath: resultFile.path) {
+                result = try JSONDecoder().decode(MAIResult.self, from: Data(contentsOf: resultFile))
+            } else {
+                let client = try MAITranscriber(endpoint: settings.speechEndpoint, key: APIKey.read(account: "azureSpeech"), model: settings.speechModel)
+                transcriptionStatus[id] = "Downloading audio…"
+                try await downloadBilibili(transcript)
+                let wav = directory.appendingPathComponent("audio.wav")
+                downloadProgress[id] = nil
+                transcriptionStatus[id] = "Preparing audio…"
+                guard let source = AudioStore.localURL(id) else { throw ImportError.invalidResponse }
+                try await Task.detached(priority: .utility) { try AudioPreparation.wav(from: source, to: wav) }.value
+                guard settings.transcriptionConsent else { throw ImportError.service("Audio transcription was turned off. Your downloaded audio is kept.") }
+                transcriptionStatus[id] = "Uploading audio…"
+                result = try await client.transcribe(wav, resultFile: resultFile) { [weak self] fraction in
+                    Task { @MainActor in
+                        guard let self, self.transcribing.contains(id) else { return }
+                        self.transcriptionProgress[id] = fraction
+                        self.transcriptionStatus[id] = fraction < 1 ? "Uploading audio…" : "Transcribing · Waiting for result…"
+                    }
+                }
+            }
+            try result.apply(to: transcript)
+            marker.mark(transcript, target: CEFR(rawValue: transcript.targetLevelOverride ?? "") ?? settings.level)
+            transcript.transcriptionState = "done"
+            try context.save()
+            // Keep the result until the transcript is durably saved; cleanup never changes success.
+            try? FileManager.default.removeItem(at: directory)
+            if settings.aiConsent { Task { await analyze(transcript) } }
+        } catch {
+            // A failed save must not leave unsaved segments that block applying the cached result.
+            if transcript.transcriptionState == "done" {
+                for item in transcript.items ?? [] { context.delete(item) }
+                for segment in transcript.segments ?? [] { context.delete(segment) }
+                transcript.items = []; transcript.segments = []
+            }
+            transcript.transcriptionState = "failed"; transcript.transcriptionError = error.localizedDescription
+            save()
+        }
+    }
+    private func downloadBilibili(_ transcript: Transcript) async throws {
+        guard let source = transcript.sourceURL else { throw ImportError.invalidURL }
+        let id = transcript.id
+        let audioFile = try AudioStore.bilibiliFile(id), videoFile = try AudioStore.videoFile(id)
+        let needsAudio = AudioStore.localURL(id) == nil
+        let needsVideo = transcript.keepVideo && !FileManager.default.fileExists(atPath: videoFile.path)
+        guard needsAudio || needsVideo else { return }
+        let media = try await BilibiliClient().resolve(BilibiliLink(source), includeVideo: needsVideo)
+        let directory = try AudioStore.workDirectory(id)
+        if needsAudio {
+            try await ReliableTransfer.download(media.audio, to: audioFile, headers: BilibiliClient.headers) { [weak self] fraction in
+                Task { @MainActor in self?.downloadProgress[id] = fraction }
+            }
+        }
+        if needsVideo && !media.link.isAudio {
+            transcriptionStatus[id] = "Downloading video…"
+            let track = directory.appendingPathComponent("video-track.mp4")
+            if !FileManager.default.fileExists(atPath: track.path) {
+                try await ReliableTransfer.download(media.video, to: track, headers: BilibiliClient.headers)
+            }
+            try await AudioPreparation.video(audio: audioFile, track: track, to: videoFile)
+        }
+    }
     private func insert(_ transcript: Transcript) throws {
         context.insert(transcript)
         marker.mark(transcript, target: CEFR(rawValue: transcript.targetLevelOverride ?? "") ?? settings.level)
@@ -56,7 +161,7 @@ import PodcastCore
         if settings.aiConsent { Task { await analyze(transcript) } }
     }
     func analyze(_ transcript: Transcript) async {
-        guard analyzing.insert(transcript.id).inserted else { return }
+        guard !transcript.orderedSegments.isEmpty, analyzing.insert(transcript.id).inserted else { return }
         defer { analyzing.remove(transcript.id) }
         transcript.analysisState = "pending"; transcript.analysisError = nil; save()
         do { try await AIAnalyzer(settings: settings).analyze(transcript); transcript.analysisState = "aiDone" }
@@ -64,11 +169,15 @@ import PodcastCore
         save()
     }
     func downloadAudio(_ transcript: Transcript) async {
-        guard downloading.insert(transcript.id).inserted else { return }
+        guard !transcribing.contains(transcript.id), downloading.insert(transcript.id).inserted else { return }
         let id = transcript.id
         audioErrors[id] = nil; downloadProgress[id] = nil
         defer { downloading.remove(id); downloadProgress[id] = nil }
         do {
+            if let source = transcript.sourceURL, (try? BilibiliLink(source)) != nil {
+                try await downloadBilibili(transcript)
+                return
+            }
             if transcript.remoteAudioURL == nil {
                 guard let source = transcript.sourceURL,
                       let remote = try await AudioResolver.resolve(EpisodeLink(source), title: transcript.title) else {
@@ -116,7 +225,8 @@ import PodcastCore
         for file in files.filter({ $0.pathExtension == "json" }).sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
             do {
                 let pending = try JSONDecoder().decode(PendingImport.self, from: Data(contentsOf: file))
-                if (try? EpisodeLink(pending.text)) != nil { _ = try await importPodcast(pending.text) }
+                if (try? BilibiliLink(pending.text)) != nil { _ = try await importBilibili(pending.text) }
+                else if (try? EpisodeLink(pending.text)) != nil { _ = try await importPodcast(pending.text) }
                 else { _ = try importText(pending.text, title: pending.title, fileExtension: pending.fileExtension) }
                 try FileManager.default.removeItem(at: file)
             } catch { self.error = "Shared import was kept for retry: \(error.localizedDescription)" }

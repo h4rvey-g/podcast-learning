@@ -1,30 +1,30 @@
 {
-  "originHash" : "7ec69fc975d4b91b573cf3a1d82b303db69dcc9f09bcb4fb0db15ae85cd46018",
+  "originHash" : "b383e3f3b18c6826fa41d7da3a8b4c4b250a02ad893a0f90f35539b79878996a",
   "pins" : [
     {
-      "identity" : "openai",
+      "identity" : "alamofire",
       "kind" : "remoteSourceControl",
-      "location" : "https://github.com/MacPaw/OpenAI.git",
+      "location" : "https://github.com/Alamofire/Alamofire.git",
       "state" : {
-        "revision" : "8baf4aaf00d87c6bb58e73b85107b7864cea11d4"
+        "revision" : "513364f870f6bfc468f9d2ff0a95caccc10044c5",
+        "version" : "5.10.2"
       }
     },
     {
-      "identity" : "swift-http-types",
+      "identity" : "swift-ai-sdk",
       "kind" : "remoteSourceControl",
-      "location" : "https://github.com/apple/swift-http-types",
+      "location" : "https://github.com/teunlao/swift-ai-sdk.git",
       "state" : {
-        "revision" : "bff4b6903cdc99dda49649dd52f46c11cfd3ed50",
-        "version" : "1.8.0"
+        "revision" : "4e0230a06092583c4dd541071b1ce8e181821bf9"
       }
     },
     {
-      "identity" : "swift-openapi-runtime",
+      "identity" : "swift-argument-parser",
       "kind" : "remoteSourceControl",
-      "location" : "https://github.com/apple/swift-openapi-runtime",
+      "location" : "https://github.com/apple/swift-argument-parser",
       "state" : {
-        "revision" : "6927ad435adf4d00fe55fc61b9a07a04673c79c8",
-        "version" : "1.13.3"
+        "revision" : "6a52f3251125d74daf04fcbd5e6f08a75d074382",
+        "version" : "1.8.2"
       }
     }
   ],

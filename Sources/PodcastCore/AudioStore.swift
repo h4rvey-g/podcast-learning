@@ -7,13 +7,25 @@ public struct AudioStore {
         return url
     }
     public static func file(_ id: UUID) throws -> URL { try directory().appendingPathComponent(id.uuidString + ".mp3") }
-    public static func localURL(_ id: UUID) -> URL? {
-        guard let url = try? file(id), FileManager.default.fileExists(atPath: url.path) else { return nil }
+    public static func bilibiliFile(_ id: UUID) throws -> URL { try directory().appendingPathComponent(id.uuidString + ".m4a") }
+    public static func videoFile(_ id: UUID) throws -> URL { try directory().appendingPathComponent(id.uuidString + ".mp4") }
+    public static func workDirectory(_ id: UUID) throws -> URL {
+        let url = try directory().appendingPathComponent(id.uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        var directory = url, values = URLResourceValues(); values.isExcludedFromBackup = true
+        try directory.setResourceValues(values)
         return url
     }
+    public static func localURL(_ id: UUID) -> URL? {
+        for url in [try? bilibiliFile(id), try? file(id)].compactMap({ $0 }) where FileManager.default.fileExists(atPath: url.path) { return url }
+        return nil
+    }
     public static func size(_ id: UUID) -> Int64 {
-        guard let url = localURL(id), let attributes = try? FileManager.default.attributesOfItem(atPath: url.path) else { return 0 }
-        return (attributes[.size] as? NSNumber)?.int64Value ?? 0
+        let work = (try? directory().appendingPathComponent(id.uuidString)).flatMap {
+            try? FileManager.default.contentsOfDirectory(at: $0, includingPropertiesForKeys: [.fileSizeKey])
+        } ?? []
+        let files = [localURL(id), try? videoFile(id)].compactMap { $0 } + work
+        return files.reduce(0) { $0 + Int64((try? $1.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0) }
     }
     public static func download(_ remote: URL, id: UUID, session: URLSession = .shared, progress: @escaping @Sendable (Double?) -> Void = { _ in }) async throws {
         guard ["https", "http"].contains(remote.scheme) else { throw ImportError.invalidURL }
@@ -30,7 +42,9 @@ public struct AudioStore {
         try url.setResourceValues(values)
     }
     public static func delete(_ id: UUID) throws {
-        if let url = localURL(id) { try FileManager.default.removeItem(at: url) }
+        for url in [try file(id), try bilibiliFile(id), try videoFile(id), try directory().appendingPathComponent(id.uuidString)] where FileManager.default.fileExists(atPath: url.path) {
+            try FileManager.default.removeItem(at: url)
+        }
     }
 }
 

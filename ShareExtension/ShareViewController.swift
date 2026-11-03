@@ -48,15 +48,18 @@ private struct ShareContent: View {
                             guard data.count <= 5_000_000 else { throw ImportError.tooLarge }
                             guard let text = String(data: data, encoding: .utf8) else { throw ImportError.invalidResponse }
                             pending = PendingImport(text: text, fileExtension: url.pathExtension, title: url.deletingPathExtension().lastPathComponent)
-                        } else { _ = try EpisodeLink(url.absoluteString); pending = PendingImport(text: url.absoluteString) }
+                        } else {
+                            if (try? BilibiliLink(url.absoluteString)) == nil { _ = try EpisodeLink(url.absoluteString) }
+                            pending = PendingImport(text: url.absoluteString)
+                        }
                     } else if let text = value as? String {
                         guard text.utf8.count <= 5_000_000 else { throw ImportError.tooLarge }
-                        pending = PendingImport(text: text)
+                        pending = PendingImport(text: (try? BilibiliLink(text))?.url.absoluteString ?? text)
                     }
                     if pending != nil { return }
                 }
             }
-            throw ImportError.service("Share an Apple Podcasts episode link, English text, or a transcript file.")
+            throw ImportError.service("Share an Apple Podcasts or Bilibili link, English text, or a transcript file.")
         } catch { self.error = error.localizedDescription }
     }
     private func save() {

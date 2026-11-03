@@ -9,9 +9,15 @@ import PodcastCore
     var host: String { didSet { defaults.set(host, forKey: "aiHost") } }
     var basePath: String { didSet { defaults.set(basePath, forKey: "aiBasePath") } }
     var model: String { didSet { defaults.set(model, forKey: "aiModel") } }
+    var aiAPI: String { didSet { defaults.set(aiAPI, forKey: "aiAPI") } }
+    var thinking: String { didSet { defaults.set(thinking, forKey: "thinking") } }
+    var speechModel: String { didSet { defaults.set(speechModel, forKey: "speechModel") } }
     var voice: String { didSet { defaults.set(voice, forKey: "voice") } }
     var rate: Double { didSet { defaults.set(rate, forKey: "rate") } }
     var aiConsent: Bool { didSet { defaults.set(aiConsent, forKey: "aiConsent") } }
+    var speechEndpoint: String { didSet { defaults.set(speechEndpoint, forKey: "speechEndpoint") } }
+    var transcriptionConsent: Bool { didSet { defaults.set(transcriptionConsent, forKey: "transcriptionConsent") } }
+    var keepBilibiliVideo: Bool { didSet { defaults.set(keepBilibiliVideo, forKey: "keepBilibiliVideo") } }
     let uid: String
     private let defaults = UserDefaults.standard
     init() {
@@ -19,9 +25,15 @@ import PodcastCore
         host = defaults.string(forKey: "aiHost") ?? "api.openai.com"
         basePath = defaults.string(forKey: "aiBasePath") ?? "/v1"
         model = defaults.string(forKey: "aiModel") ?? "gpt-4.1"
+        aiAPI = defaults.string(forKey: "aiAPI") ?? "chat"
+        thinking = defaults.string(forKey: "thinking") ?? "provider-default"
+        speechModel = defaults.string(forKey: "speechModel") ?? "MAI-Transcribe-2"
         voice = defaults.string(forKey: "voice") ?? "en-US"
         rate = defaults.object(forKey: "rate") as? Double ?? 0.45
         aiConsent = defaults.bool(forKey: "aiConsent")
+        speechEndpoint = defaults.string(forKey: "speechEndpoint") ?? ""
+        transcriptionConsent = defaults.bool(forKey: "transcriptionConsent")
+        keepBilibiliVideo = defaults.bool(forKey: "keepBilibiliVideo")
         uid = defaults.string(forKey: "podTextUID") ?? UUID().uuidString
         defaults.set(uid, forKey: "podTextUID")
     }
@@ -31,8 +43,8 @@ import PodcastCore
 
 enum APIKey {
     static let service = "PodcastLearning.AI"
-    static func read() throws -> String {
-        var query = baseQuery
+    static func read(account: String = "apiKey") throws -> String {
+        var query = baseQuery(account)
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
         var result: CFTypeRef?
@@ -41,22 +53,22 @@ enum APIKey {
         guard status == errSecSuccess, let data = result as? Data, let value = String(data: data, encoding: .utf8) else { throw failure(status) }
         return value
     }
-    static func save(_ value: String) throws {
+    static func save(_ value: String, account: String = "apiKey") throws {
         if value.isEmpty {
-            let status = SecItemDelete(baseQuery as CFDictionary)
+            let status = SecItemDelete(baseQuery(account) as CFDictionary)
             guard status == errSecSuccess || status == errSecItemNotFound else { throw failure(status) }
             return
         }
         let data = Data(value.utf8)
-        let status = SecItemUpdate(baseQuery as CFDictionary, [kSecValueData as String: data] as CFDictionary)
+        let status = SecItemUpdate(baseQuery(account) as CFDictionary, [kSecValueData as String: data] as CFDictionary)
         if status == errSecItemNotFound {
-            var query = baseQuery
+            var query = baseQuery(account)
             query[kSecValueData as String] = data
             query[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
             let result = SecItemAdd(query as CFDictionary, nil)
             guard result == errSecSuccess else { throw failure(result) }
         } else if status != errSecSuccess { throw failure(status) }
     }
-    private static var baseQuery: [String: Any] { [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service, kSecAttrAccount as String: "apiKey"] }
+    private static func baseQuery(_ account: String) -> [String: Any] { [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service, kSecAttrAccount as String: account] }
     private static func failure(_ code: OSStatus) -> NSError { NSError(domain: NSOSStatusErrorDomain, code: Int(code), userInfo: [NSLocalizedDescriptionKey: "Keychain access failed (\(code)). Unlock your device and try again."]) }
 }

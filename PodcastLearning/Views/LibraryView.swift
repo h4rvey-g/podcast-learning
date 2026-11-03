@@ -21,7 +21,7 @@ struct LibraryView: View {
                     Text("Library").font(.largeTitle.bold()).padding(.bottom, 20)
                     if filtered.isEmpty {
                         ContentUnavailableView(search.isEmpty ? "Your Listening, Your Learning" : "No Matching Transcripts", systemImage: search.isEmpty ? "headphones" : "magnifyingglass",
-                            description: Text(search.isEmpty ? "Import a podcast episode or some English text to start learning." : "Try another title or show name."))
+                            description: Text(search.isEmpty ? "Import an Apple Podcasts or Bilibili link, or English text to start learning." : "Try another title or show name."))
                         if search.isEmpty { PrimaryButton(title: "New Transcript", symbol: "plus") { showImport = true } }
                     }
                     ForEach(filtered) { transcript in
@@ -57,7 +57,7 @@ struct LibraryView: View {
                     let transcript = try store.importText(text, title: url.deletingPathExtension().lastPathComponent, fileExtension: url.pathExtension)
                     path.append(transcript)
                 } catch { store.error = error.localizedDescription }
-            } else if url.host == "podcasts.apple.com" { sharedText = url.absoluteString; showImport = true }
+            } else if url.host == "podcasts.apple.com" || (try? BilibiliLink(url.absoluteString)) != nil { sharedText = url.absoluteString; showImport = true }
         }
     }
     private func libraryCard(_ transcript: Transcript) -> some View {
@@ -68,7 +68,9 @@ struct LibraryView: View {
                 Text(transcript.title).font(.headline).lineLimit(2)
                 Text("\(transcript.author) · " + (transcript.analysisState == "pending" ? "\(transcript.orderedSegments.count) segments" : "\(transcript.activeItems.count) words")).font(.footnote).foregroundStyle(.secondary)
                 HStack {
-                    if transcript.analysisState == "pending" { Label("Finding key sentences…", systemImage: "sparkles").foregroundStyle(Palette.ai) }
+                    if transcript.transcriptionState == "pending" { Label("Transcribing audio…", systemImage: "waveform").foregroundStyle(.secondary) }
+                else if transcript.transcriptionState == "failed" { Label("Transcription interrupted · Retry", systemImage: "arrow.clockwise").foregroundStyle(.red) }
+                else if transcript.analysisState == "pending" { Label("Finding key sentences…", systemImage: "sparkles").foregroundStyle(Palette.ai) }
                     else if transcript.analysisState == "aiFailed" { Label("AI analysis failed · Retry", systemImage: "arrow.clockwise").foregroundStyle(.red) }
                     else { Label(transcript.activeItems.isEmpty ? "Ready to read" : mastered == transcript.activeItems.count ? "All mastered" : "\(transcript.activeItems.count - mastered) to practice", systemImage: mastered == transcript.activeItems.count && mastered > 0 ? "checkmark.circle" : "pencil")
                         .foregroundStyle(mastered > 0 && mastered == transcript.activeItems.count ? .green : .secondary)

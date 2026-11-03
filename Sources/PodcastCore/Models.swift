@@ -26,6 +26,9 @@ public enum ItemSource: String, CaseIterable, Sendable {
     public var targetLevelOverride: String?
     public var analysisState: String = "marked"
     public var analysisError: String?
+    public var transcriptionState: String = "none"
+    public var transcriptionError: String?
+    public var keepVideo: Bool = false
     public var createdAt: Date = Date()
     @Relationship(deleteRule: .cascade, inverse: \Segment.transcript) public var segments: [Segment]?
     @Relationship(deleteRule: .cascade, inverse: \DictationItem.transcript) public var items: [DictationItem]?

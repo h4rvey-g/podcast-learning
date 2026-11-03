@@ -2,6 +2,7 @@ import SwiftUI
 import SwiftData
 import AVFoundation
 import PodcastCore
+import PodcastAI
 
 struct SettingsView: View {
     @Environment(SettingsStore.self) private var settings
@@ -28,12 +29,19 @@ struct SettingsView: View {
                 NavigationLink {
                     Form { TextField("Model", text: $settings.model).textInputAutocapitalization(.never).autocorrectionDisabled() }.navigationTitle("Model")
                 } label: { row("Model", value: settings.model, symbol: "cpu", color: .indigo) }
+                Picker(selection: $settings.thinking) {
+                    ForEach(ThinkingLevel.allCases, id: \.rawValue) { Text($0.label).tag($0.rawValue) }
+                } label: { Label { Text("Thinking Level") } icon: { SettingsIcon(symbol: "brain", color: .indigo) } }.pickerStyle(.navigationLink)
                 NavigationLink { apiKeyForm } label: { row("API Key", value: key.isEmpty ? "Not Set" : "In Keychain", symbol: "key", color: .indigo) }
                 Button { Task { await testConnection() } } label: {
                     HStack { SettingsIcon(symbol: "cable.connector", color: .cyan); Text("Test Connection"); Spacer(); if testing { ProgressView() } }
                 }.disabled(testing)
                 if !testStatus.isEmpty { Text(testStatus).font(.footnote).foregroundStyle(.secondary) }
             } header: { Text("AI") } footer: { Text(settings.aiConsent ? "AI is enabled. Transcripts are sent to your provider; charges may apply." : "AI is off. Enable it in Provider to generate explanations and word details.") }
+            Section {
+                NavigationLink { TranscriptionSettingsView() } label: { row("Audio Transcription", value: settings.transcriptionConsent ? "MAI-Transcribe-2" : "Off", symbol: "waveform.badge.mic", color: .indigo) }
+                Toggle("Keep Bilibili Video", isOn: $settings.keepBilibiliVideo)
+            } header: { Text("Bilibili Imports") } footer: { Text("Audio only by default. Keep Video saves a local video with sound for new imports; only audio is uploaded for transcription. Video uses more storage and data. Turning this off also skips video when retrying an interrupted transcription.") }
             Section("Speech") {
                 Picker(selection: Binding(get: { settings.speechVoice?.identifier ?? settings.voice }, set: { settings.voice = $0 })) {
                     ForEach(voices, id: \.identifier) { voice in Text("\(voice.name) (\(voice.language == "en-GB" ? "UK" : String(voice.language.dropFirst(3))))").tag(voice.identifier) }
@@ -47,14 +55,14 @@ struct SettingsView: View {
             }
             Section("Storage and About") {
                 NavigationLink { audioForm } label: {
-                    row("Downloaded Audio", value: ByteCountFormatter.string(fromByteCount: downloaded.reduce(0) { $0 + AudioStore.size($1.id) }, countStyle: .file), symbol: "internaldrive", color: .gray)
+                    row("Downloaded Media", value: ByteCountFormatter.string(fromByteCount: downloaded.reduce(0) { $0 + AudioStore.size($1.id) }, countStyle: .file), symbol: "internaldrive", color: .gray)
                 }
                 NavigationLink { acknowledgments } label: { row("Acknowledgments", value: "", symbol: "book.closed", color: .gray) }
             }.id(storageRevision)
         }.navigationTitle("Settings")
             .onAppear { readKey() }
-            .confirmationDialog("Delete downloaded audio? The transcript and word progress are kept.", isPresented: Binding(get: { deletingAudio != nil }, set: { if !$0 { deletingAudio = nil } }), titleVisibility: .visible) {
-                Button("Delete Audio", role: .destructive) {
+            .confirmationDialog("Delete downloaded audio, video, and transcription transfer files? The transcript and word progress are kept.", isPresented: Binding(get: { deletingAudio != nil }, set: { if !$0 { deletingAudio = nil } }), titleVisibility: .visible) {
+                Button("Delete Media", role: .destructive) {
                     if let transcript = deletingAudio { do { try AudioStore.delete(transcript.id); storageRevision += 1 } catch { store.error = error.localizedDescription } }
                     deletingAudio = nil
                 }
@@ -69,9 +77,10 @@ struct SettingsView: View {
         return Form {
             Section {
                 Toggle("Enable AI Analysis", isOn: $settings.aiConsent)
+                Picker("API", selection: $settings.aiAPI) { ForEach(AIProviderAPI.allCases, id: \.rawValue) { Text($0.label).tag($0.rawValue) } }
                 LabeledContent("Hostname") { TextField("api.openai.com", text: $settings.host).multilineTextAlignment(.trailing).textInputAutocapitalization(.never).autocorrectionDisabled() }
                 LabeledContent("Base Path") { TextField("/v1", text: $settings.basePath).multilineTextAlignment(.trailing).textInputAutocapitalization(.never).autocorrectionDisabled() }
-            } footer: { Text("When enabled, imported transcripts and selected sentences are sent to your configured provider for analysis. Your API key stays in this device’s Keychain. Provider charges may apply. AI output, including pronunciation, can be inaccurate.") }
+            } footer: { Text("When enabled, imported transcripts and selected sentences are sent to your configured provider for analysis. Your API key stays in this device’s Keychain. Provider charges may apply. Thinking Level controls reasoning effort, not visible chain-of-thought. Use Provider Default for models without configurable reasoning; supported levels vary and higher levels can cost more or take longer. AI output, including pronunciation, can be inaccurate.") }
         }.navigationTitle("Provider")
     }
     private var apiKeyForm: some View {
@@ -90,11 +99,11 @@ struct SettingsView: View {
                 HStack {
                     VStack(alignment: .leading, spacing: 4) { Text(transcript.title); Text(ByteCountFormatter.string(fromByteCount: AudioStore.size(transcript.id), countStyle: .file)).font(.footnote).foregroundStyle(.secondary) }
                     Spacer()
-                    Button("Delete Audio", systemImage: "trash", role: .destructive) { deletingAudio = transcript }.labelStyle(.iconOnly).buttonStyle(.borderless).frame(width: 44, height: 44)
+                    Button("Delete Media", systemImage: "trash", role: .destructive) { deletingAudio = transcript }.labelStyle(.iconOnly).buttonStyle(.borderless).frame(width: 44, height: 44).disabled(store.transcribing.contains(transcript.id) || store.downloading.contains(transcript.id))
                 }
             }
-            if downloaded.isEmpty { Text("No audio downloaded").foregroundStyle(.secondary) }
-        }.id(storageRevision).navigationTitle("Downloaded Audio")
+            if downloaded.isEmpty { Text("No media downloaded").foregroundStyle(.secondary) }
+        }.id(storageRevision).navigationTitle("Downloaded Media")
     }
     private var acknowledgments: some View {
         Form {
@@ -102,7 +111,7 @@ struct SettingsView: View {
             Link("CEFR-J Project", destination: URL(string: "https://www.cefr-j.org/")!)
             Link("Octanove Vocabulary Profile · CC BY-SA", destination: URL(string: "https://github.com/openlanguageprofiles/olp-en-cefrj")!)
             Link("CC BY-SA 4.0 License", destination: URL(string: "https://creativecommons.org/licenses/by-sa/4.0/")!)
-            Text("Transcripts via PodText. Audio and transcripts belong to their respective publishers. OpenAI Swift SDK by MacPaw (MIT).").font(.footnote).foregroundStyle(.secondary)
+            Text("Transcripts via PodText and Microsoft MAI-Transcribe-2. Audio and transcripts belong to their respective publishers. Swift AI SDK by teunlao (Apache 2.0) and Alamofire (MIT).").font(.footnote).foregroundStyle(.secondary)
         }.navigationTitle("Acknowledgments")
     }
     private func readKey() {

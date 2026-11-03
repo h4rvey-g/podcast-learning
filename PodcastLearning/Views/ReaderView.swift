@@ -1,4 +1,5 @@
 import SwiftUI
+import AVKit
 import PodcastCore
 
 private enum ReaderSelection: Identifiable {
@@ -15,6 +16,7 @@ struct ReaderView: View {
     @State private var selection: ReaderSelection?
     @State private var highlightedItemID: UUID?
     @State private var practice = false
+    @State private var showVideo = false
     @State private var includeMastered = false
     var body: some View {
         VStack(spacing: 12) {
@@ -37,6 +39,7 @@ struct ReaderView: View {
                 }
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 24) {
+                        transcriptionStatus
                         analysisStatus
                         ForEach(transcript.orderedSegments) { segment in
                             VStack(alignment: .leading, spacing: 10) {
@@ -78,17 +81,20 @@ struct ReaderView: View {
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
                     Toggle("Include Mastered Words", isOn: $includeMastered)
-                    Button("Analyze with AI", systemImage: "sparkles") { Task { await store.analyze(transcript) } }.disabled(transcript.analysisState == "pending")
+                    if let file = try? AudioStore.videoFile(transcript.id), FileManager.default.fileExists(atPath: file.path) {
+                        Button("Play Downloaded Video", systemImage: "video") { player.stop(); showVideo = true }
+                    }
+                    Button("Analyze with AI", systemImage: "sparkles") { Task { await store.analyze(transcript) } }.disabled(transcript.analysisState == "pending" || transcript.orderedSegments.isEmpty)
                     if (transcript.remoteAudioURL != nil || transcript.sourceURL != nil) && AudioStore.localURL(transcript.id) == nil {
-                        Button(store.audioErrors[transcript.id] == nil ? "Download Audio" : "Retry Audio Download", systemImage: "arrow.down.circle") { Task { await store.downloadAudio(transcript) } }.disabled(store.downloading.contains(transcript.id))
+                        Button(store.audioErrors[transcript.id] == nil ? "Download Audio" : "Retry Audio Download", systemImage: "arrow.down.circle") { Task { await store.downloadAudio(transcript) } }.disabled(store.downloading.contains(transcript.id) || store.transcribing.contains(transcript.id))
                     }
                 } label: { Image(systemName: "ellipsis") }.accessibilityLabel("More")
             }
         }
         .safeAreaInset(edge: .bottom) {
             VStack(spacing: 10) {
-                AudioDownloadStatus(transcript: transcript)
-                if tab == 0 { PlaybackBar(transcript: transcript) }
+                if transcript.transcriptionState == "none" || transcript.transcriptionState == "done" { AudioDownloadStatus(transcript: transcript) }
+                if tab == 0 && !transcript.orderedSegments.isEmpty { PlaybackBar(transcript: transcript) }
                 PrimaryButton(title: "Start Dictation", symbol: "pencil.line") { player.stop(); practice = true }
                     .disabled(transcript.activeItems.isEmpty).opacity(transcript.activeItems.isEmpty ? 0.5 : 1)
             }.padding(.horizontal, 16).padding(.bottom, 8)
@@ -99,8 +105,31 @@ struct ReaderView: View {
             case .sentence(let sentence): SentenceSheet(sentence: sentence, transcript: transcript)
             }
         }
+        .sheet(isPresented: $showVideo) {
+            if let file = try? AudioStore.videoFile(transcript.id) { DownloadedVideoView(url: file) }
+        }
         .fullScreenCover(isPresented: $practice) { DictationView(transcript: transcript, includeMastered: includeMastered) }
         .onDisappear { player.stop(); store.save() }
+    }
+    @ViewBuilder private var transcriptionStatus: some View {
+        if transcript.transcriptionState == "pending" {
+            VStack(alignment: .leading, spacing: 10) {
+                Label(store.transcriptionStatus[transcript.id] ?? "Preparing transcription…", systemImage: "waveform")
+                    .font(.headline)
+                ProgressView(value: store.transcriptionProgress[transcript.id].flatMap { $0 < 1 ? $0 : nil } ?? (store.transcriptionProgress[transcript.id] == nil ? store.downloadProgress[transcript.id] : nil))
+                    .accessibilityLabel("Transcription Transfer")
+                Text("Keep Learn open. Temporary network failures retry automatically; audio and completed results are kept for retry.")
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
+        } else if transcript.transcriptionState == "failed" {
+            VStack(alignment: .leading, spacing: 8) {
+                Label("Transcription Interrupted", systemImage: "exclamationmark.arrow.circlepath").font(.headline)
+                Text(transcript.transcriptionError ?? "Your downloaded audio is kept.").font(.footnote).foregroundStyle(.secondary)
+                Button("Retry Transcription", systemImage: "arrow.clockwise") { Task { await store.transcribe(transcript) } }
+                    .frame(minHeight: 44)
+                NavigationLink("Audio Transcription Settings") { TranscriptionSettingsView() }.frame(minHeight: 44)
+            }
+        }
     }
     @ViewBuilder private var analysisStatus: some View {
         if transcript.analysisState == "pending" { HStack { ProgressView(); Text("Finding key sentences…").font(.footnote).foregroundStyle(Palette.ai) } }

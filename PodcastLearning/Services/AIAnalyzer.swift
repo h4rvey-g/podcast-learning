@@ -1,40 +1,14 @@
 import Foundation
-import OpenAI
+import PodcastAI
 import PodcastCore
 
 @MainActor struct AIAnalyzer {
     let settings: SettingsStore
-    private func client() throws -> OpenAI {
-        let key = try APIKey.read()
-        guard !key.isEmpty else { throw ImportError.service("Add your API key in Settings to use AI analysis.") }
-        let host = settings.host.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !host.isEmpty, !host.contains("/"), !host.contains(":"), !settings.model.isEmpty,
-              settings.basePath.hasPrefix("/"), !settings.basePath.contains("?") else {
-            throw ImportError.service("Use a hostname such as api.openai.com and a base path such as /v1.")
-        }
-        return OpenAI(configuration: .init(token: key, host: host, basePath: settings.basePath, timeoutInterval: 180))
-    }
     func completion(system: String, input: String, json: Bool = false) async throws -> String {
-        let api = try client()
-        func request(_ format: ChatQuery.ResponseFormat) async throws -> ChatResult {
-            try await api.chats(query: ChatQuery(
-                messages: [.system(.init(content: .textContent(system))), .user(.init(content: .string(input)))],
-                model: settings.model, maxCompletionTokens: json ? 12000 : 2000, responseFormat: format))
-        }
-        var format: ChatQuery.ResponseFormat = .text
-        if json {
-            let schema = try JSONDecoder().decode(JSONSchema.self, from: AIAnalysis.schemaData())
-            format = .jsonSchema(.init(name: "transcript_analysis", schema: .jsonSchema(schema), strict: true))
-        }
-        let result: ChatResult
-        do { result = try await request(format) }
-        catch let failure as APIErrorResponse where json &&
-            (failure.error.param?.hasPrefix("response_format") == true || failure.error.message.lowercased().contains("json_schema")) {
-            result = try await request(.jsonObject)
-        }
-        guard let choice = result.choices.first, choice.finishReason != "length",
-              let text = choice.message.content, !text.isEmpty else { throw ImportError.invalidResponse }
-        return text
+        let client = try AIClient(baseURL: "https://\(settings.host)\(settings.basePath)", model: settings.model,
+                                  key: APIKey.read(), api: AIProviderAPI(rawValue: settings.aiAPI) ?? .chat,
+                                  thinking: ThinkingLevel(rawValue: settings.thinking) ?? .providerDefault)
+        return try await client.completion(system: system, input: input, json: json)
     }
     func analyze(_ transcript: Transcript) async throws {
         guard settings.aiConsent else { throw ImportError.service("Enable AI analysis in Settings to send transcripts to your provider.") }

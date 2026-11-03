@@ -16,7 +16,7 @@ A personal iOS app for learning English through intensive reading of podcast tra
 | Word lists | CEFR-J 1.6 (A1–B2) + Octanove C1/C2 1.0, preprocessed into one bundled JSON. |
 | Target level | Global setting (e.g. B2+) with a per-transcript override. |
 | Lemmatizer | Apple NaturalLanguage (`NLTagger`, `.lemma` + `.lexicalClass` + `.nameType`). |
-| AI | Your own API key (Keychain). `MacPaw/OpenAI` Swift package with any OpenAI-compatible host. One long-context call per transcript, run automatically on import. |
+| AI | Your own API key (Keychain). `teunlao/swift-ai-sdk` through shared PodcastAI, with explicit Chat Completions or Responses routing. Configurable thinking effort; Provider Default preserves the provider default. One long-context call per transcript, run automatically on import. |
 | AI role | Pick key sentences, find hard words or phrases in them that the lists miss (auto-added, you remove), and write Chinese glosses for all dictation items. Explains a sentence on demand. |
 | Ads | Kept and treated as normal text. |
 | Tap translation | Word: popover (lemma, level, gloss, add/remove, 🔊). Sentence (long-press): Apple Translation framework + "AI explain". |
@@ -63,7 +63,7 @@ error → {"success": false, "error": "...", "code": "no_transcript" | ...}
 
 **Apple Podcasts TTML** (the approach used by the linked repos) needs the macOS Podcasts cache or a FairPlay-signed token, so it can't be used on iOS. Rejected.
 
-**MacPaw/OpenAI**: actively maintained (~3k★). Supports iOS 13+. `OpenAI.Configuration(token:host:basePath:...)` targets any OpenAI-compatible provider. Structured output via `ChatQuery(responseFormat: .jsonSchema(... .derivedJsonSchema(T.self)))`.
+**Swift AI SDK (updated 2026-11-03)**: `teunlao/swift-ai-sdk`, pinned at `4e0230a06092583c4dd541071b1ce8e181821bf9`. `createOpenAIProvider` takes an HTTPS base URL and key; `.chat(model)` and `.responses(model)` select the wire API. `generateText` uses the existing analysis JSON schema and reasoning effort through `CallSettings`. Strict schema fallback remains limited to format rejection; unsupported thinking levels fail before sending. OpenRouter speech continues to use Alamofire multipart requests, not this text SDK.
 
 **Word lists** in `resources/`:
 - `CEFR-J Wordlist Ver1.6.xlsx`: use sheet `ALL_sep`, columns `headword, pos, CEFR, ...`. 7,988 rows: A1 1200, A2 1443, B1 2486, B2 2859. Some headwords have variants separated by `/` (e.g. `a.m./A.M./am/AM`).
@@ -190,7 +190,7 @@ Run with `uv run --with openpyxl scripts/build_wordlist.py`.
 | M2 | List marking, target level (global + override), item list with add/remove/restore | A B2+ setting marks the expected words in a sample text. |
 | M3 | Dictation with TTS, hint ladder, Leitner, skip mastered | You can finish a session, and the boxes and due dates update. |
 | M4 | Podcast import: PodText, MP3 resolver/downloader, share extension, AVPlayer paragraph clips | Importing the test URL gives 207 segments, the MP3 plays, and dictation plays the paragraph clip. |
-| M5 | AI analysis (MacPaw/OpenAI), key sentences, extra items, glosses, "AI explain", retry | The test episode gets key sentences, AI phrases auto-added, glosses on all items. |
+| M5 | AI analysis (Swift AI SDK), key sentences, extra items, glosses, "AI explain", retry | The test episode gets key sentences, AI phrases auto-added, glosses on all items. |
 | M6 | Turn on iCloud sync (CloudKit container), handle missing audio on a second device | Data appears on a second device. Audio shows "Download" there. |
 
 ## 8. Tests (unit, no UI)

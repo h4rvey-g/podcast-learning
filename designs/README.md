@@ -1,6 +1,6 @@
 # Podcast Learning designs
 
-- `podcast-learning.fig`: 15 iPhone states in light and dark appearances. The original 11 screens are on **Page 1**; **Download & Paragraph States** adds grouped dictation, grouped retry, downloading, and download-failed states.
+- `podcast-learning.fig`: 22 iPhone states in light and dark appearances. The original 11 screens are on **Page 1**; **Download & Paragraph States** adds grouped dictation, grouped retry, downloading, and download-failed states. **Bilibili & Transcription** adds Bilibili import (16), media settings (17), Azure/OpenRouter speech setup (18), upload progress (19), and interrupted/retry recovery (20), AI settings with thinking effort (21), and the thinking-level picker (22).
 - `png/`: exports made with SF Pro, New York and PingFang SC.
 
 Dictation progress counts paragraphs. **Both attempts are edited directly in the paragraph**, never in separate answer fields below it. Blanks have no visible `[1]`/`[2]` labels. The first attempt uses an inline text input and insertion caret. On retry, the missed word becomes connected letters and underscores, with no cells, borders, backgrounds or extra letter spacing. Given first/last/every-third-index letters stay fixed; typing fills the underscores and advances to the next editable letter. Backspace and paste work within the same word. Each answer remains one accessible input, not tiny independent letter targets.
@@ -10,6 +10,12 @@ Blanks are checked together, with per-word grades and immediately saved reviews.
 The paragraph waveform (07–09, 12–13) is a seek control with a 44pt-high touch target. Tap or drag to preview a playback position; release starts downloaded audio at that point, clamped to the current paragraph's timestamps. Played fill and the playhead move continuously instead of changing one whole bar at a time. VoiceOver gets an adjustable slider, and interpolation respects Reduce Motion. Without timed downloaded audio, text-to-speech keeps its existing replay/progress behavior. Canvas comments record both input and seeking contracts.
 
 Download progress uses actual received bytes, with indeterminate progress while resolving audio or when the response size is unknown. Failure offers an inline retry; text to speech, reading, and dictation remain available. Canvas comments record these behaviors.
+
+Bilibili imports accept au/BV/av links, video parts, and b23.tv shares. Audio-only downloads/uploads are the default. Keep Bilibili Video optionally retains a local MP4 with sound; only the prepared audio is uploaded to Microsoft MAI-Transcribe-2. Transcription has independent consent, endpoint, model, and Keychain credentials. It supports direct Azure or OpenRouter’s microsoft/mai-transcribe-2. OpenRouter uploads use five-minute WAV parts below 25 MB, with completed-part checkpoints and correctly offset combined timestamps. Reader clips use validated word timestamps.
+
+Text AI uses Swift AI SDK with Chat Completions or Responses routing. Thinking Level is a native navigation-link picker with Provider Default, None, Minimal, Low, Medium, High, Extra High, and Max. Provider Default preserves existing behavior. Supported levels vary; higher effort can increase latency and cost, and unsupported selections fail before sending rather than silently dropping the preference. Reasoning text is not surfaced or persisted.
+
+Transfers wait for connectivity and retry temporary failures, honoring Retry-After. Download/upload progress reflects transferred bytes; recognition and result delivery use indeterminate progress. Keep the app open: these flows do not promise iOS background-session completion. Interrupted imports persist for manual retry after relaunch and reuse complete local checkpoints. A lost synchronous response can require another upload and provider charge; there is no retrievable result job ID. Canvas comments document the contract. Settings storage includes retained video and intermediate transfer files.
 
 ## Regenerate
 

@@ -20,7 +20,6 @@ def ref(path, kind):
 
 config = ref('Config.xcconfig', 'text.xcconfig')
 local = add('local-package', 'XCLocalSwiftPackageReference', relativePath='.')
-remote = add('openai-package', 'XCRemoteSwiftPackageReference', repositoryURL='https://github.com/MacPaw/OpenAI.git', requirement={'kind': 'revision', 'revision': '8baf4aaf00d87c6bb58e73b85107b7864cea11d4'})
 products, groups, targets = [], [], []
 
 
@@ -44,7 +43,7 @@ for name, bundle, product_type in [('ShareExtension', '$(SHARE_BUNDLE_ID)', 'com
         resources.append(add('asset-build','PBXBuildFile',fileRef=asset))
     resource_phase = add(name+'-resources','PBXResourcesBuildPhase',buildActionMask='2147483647',files=resources,runOnlyForDeploymentPostprocessing='0')
     dependencies = [add(name+'-core','XCSwiftPackageProductDependency',package=local,productName='PodcastCore')]
-    if name == 'PodcastLearning': dependencies.append(add('app-openai','XCSwiftPackageProductDependency',package=remote,productName='OpenAI'))
+    if name == 'PodcastLearning': dependencies.append(add('app-ai','XCSwiftPackageProductDependency',package=local,productName='PodcastAI'))
     frameworks = add(name+'-frameworks','PBXFrameworksBuildPhase',buildActionMask='2147483647',files=[add(d+'-link','PBXBuildFile',productRef=d) for d in dependencies],runOnlyForDeploymentPostprocessing='0')
     product = add(name+'-product','PBXFileReference',explicitFileType='wrapper.app-extension' if name == 'ShareExtension' else 'wrapper.application',path=name+('.appex' if name == 'ShareExtension' else '.app'),sourceTree='BUILT_PRODUCTS_DIR')
     products.append(product)
@@ -61,7 +60,7 @@ embed = add('embed-share','PBXCopyFilesBuildPhase',buildActionMask='2147483647',
 objects[targets[1]]['buildPhases'].append(embed)
 product_group = add('products','PBXGroup',children=products,name='Products',sourceTree='<group>')
 main = add('main','PBXGroup',children=[config]+groups+[product_group],sourceTree='<group>')
-add('project','PBXProject',attributes={'LastUpgradeCheck':'1600','TargetAttributes':{t:{'CreatedOnToolsVersion':'16.0'} for t in targets}},buildConfigurationList=configs('project',{'CLANG_ENABLE_MODULES':'YES','SWIFT_VERSION':'5.0','IPHONEOS_DEPLOYMENT_TARGET':'18.0'},False),compatibilityVersion='Xcode 14.0',developmentRegion='en',knownRegions=['en','Base'],mainGroup=main,productRefGroup=product_group,projectDirPath='',projectRoot='',targets=targets,packageReferences=[local,remote])
+add('project','PBXProject',attributes={'LastUpgradeCheck':'1600','TargetAttributes':{t:{'CreatedOnToolsVersion':'16.0'} for t in targets}},buildConfigurationList=configs('project',{'CLANG_ENABLE_MODULES':'YES','SWIFT_VERSION':'5.0','IPHONEOS_DEPLOYMENT_TARGET':'18.0'},False),compatibilityVersion='Xcode 14.0',developmentRegion='en',knownRegions=['en','Base'],mainGroup=main,productRefGroup=product_group,projectDirPath='',projectRoot='',targets=targets,packageReferences=[local])
 project = ROOT / 'PodcastLearning.xcodeproj'; project.mkdir(exist_ok=True)
 (project / 'project.pbxproj').write_bytes(plistlib.dumps({'archiveVersion':'1','classes':{},'objectVersion':'56','objects':objects,'rootObject':project_id},sort_keys=False))
 scheme = project / 'xcshareddata/xcschemes'; scheme.mkdir(parents=True,exist_ok=True)

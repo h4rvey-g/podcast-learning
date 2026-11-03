@@ -28,20 +28,6 @@
 			<key>relativePath</key>
 			<string>.</string>
 		</dict>
-		<key>2514B0142C454E0DD57112E2</key>
-		<dict>
-			<key>isa</key>
-			<string>XCRemoteSwiftPackageReference</string>
-			<key>repositoryURL</key>
-			<string>https://github.com/MacPaw/OpenAI.git</string>
-			<key>requirement</key>
-			<dict>
-				<key>kind</key>
-				<string>revision</string>
-				<key>revision</key>
-				<string>8baf4aaf00d87c6bb58e73b85107b7864cea11d4</string>
-			</dict>
-		</dict>
 		<key>694ABD5BBB8B00DF7BEFBB90</key>
 		<dict>
 			<key>isa</key>
@@ -371,6 +357,17 @@
 			<key>sourceTree</key>
 			<string>&lt;group&gt;</string>
 		</dict>
+		<key>EF7FDE32EB55E35E5D79EED3</key>
+		<dict>
+			<key>isa</key>
+			<string>PBXFileReference</string>
+			<key>lastKnownFileType</key>
+			<string>sourcecode.swift</string>
+			<key>path</key>
+			<string>PodcastLearning/Views/DownloadedVideoView.swift</string>
+			<key>sourceTree</key>
+			<string>&lt;group&gt;</string>
+		</dict>
 		<key>D0F70CD1F1826971CD16899A</key>
 		<dict>
 			<key>isa</key>
@@ -434,6 +431,17 @@
 			<string>sourcecode.swift</string>
 			<key>path</key>
 			<string>PodcastLearning/Views/SettingsView.swift</string>
+			<key>sourceTree</key>
+			<string>&lt;group&gt;</string>
+		</dict>
+		<key>C97D4044E1AC0D1395533A1D</key>
+		<dict>
+			<key>isa</key>
+			<string>PBXFileReference</string>
+			<key>lastKnownFileType</key>
+			<string>sourcecode.swift</string>
+			<key>path</key>
+			<string>PodcastLearning/Views/TranscriptionSettingsView.swift</string>
 			<key>sourceTree</key>
 			<string>&lt;group&gt;</string>
 		</dict>
@@ -519,6 +527,13 @@
 			<key>fileRef</key>
 			<string>7BBA80460AF490ADB77ABC2A</string>
 		</dict>
+		<key>5209E343345F05BB2573BF0D</key>
+		<dict>
+			<key>isa</key>
+			<string>PBXBuildFile</string>
+			<key>fileRef</key>
+			<string>EF7FDE32EB55E35E5D79EED3</string>
+		</dict>
 		<key>B55BA8C304E5FEE12D997C46</key>
 		<dict>
 			<key>isa</key>
@@ -561,6 +576,13 @@
 			<key>fileRef</key>
 			<string>A02001656A0E6DDF6A804F71</string>
 		</dict>
+		<key>5044DC7DCA3ED98A3BA347B1</key>
+		<dict>
+			<key>isa</key>
+			<string>PBXBuildFile</string>
+			<key>fileRef</key>
+			<string>C97D4044E1AC0D1395533A1D</string>
+		</dict>
 		<key>418C0747B7FDEED0C089413D</key>
 		<dict>
 			<key>isa</key>
@@ -583,12 +605,14 @@
 				<string>AA01D15809BD43D6B4AAE491</string>
 				<string>6F96DFAF4FD30258FBBD6013</string>
 				<string>4209CF4A1A7A72E438090F04</string>
+				<string>5209E343345F05BB2573BF0D</string>
 				<string>B55BA8C304E5FEE12D997C46</string>
 				<string>A4D3430C753CD8024D7534FB</string>
 				<string>22C2609EEBF586F02C6D3B7A</string>
 				<string>2A0B6D81CE4B981EF7BDD7A1</string>
 				<string>2FA98A0714A2FE902D6F99F1</string>
 				<string>569E3E5ADB1546EAD571F9D9</string>
+				<string>5044DC7DCA3ED98A3BA347B1</string>
 				<string>418C0747B7FDEED0C089413D</string>
 			</array>
 			<key>runOnlyForDeploymentPostprocessing</key>
@@ -645,14 +669,14 @@
 			<key>productName</key>
 			<string>PodcastCore</string>
 		</dict>
-		<key>A848D420CA57707138050892</key>
+		<key>F2BAC69CE0F9FC0DA0C93A69</key>
 		<dict>
 			<key>isa</key>
 			<string>XCSwiftPackageProductDependency</string>
 			<key>package</key>
-			<string>2514B0142C454E0DD57112E2</string>
+			<string>4C62EC40DF63DF0873D128AE</string>
 			<key>productName</key>
-			<string>OpenAI</string>
+			<string>PodcastAI</string>
 		</dict>
 		<key>E33114FFAA446C3A2AC03D59</key>
 		<dict>
@@ -661,12 +685,12 @@
 			<key>productRef</key>
 			<string>42E3F977141D2B440E78A967</string>
 		</dict>
-		<key>9829D9785C649120DEF7ACA6</key>
+		<key>661170B0A10BE06A68E0C70D</key>
 		<dict>
 			<key>isa</key>
 			<string>PBXBuildFile</string>
 			<key>productRef</key>
-			<string>A848D420CA57707138050892</string>
+			<string>F2BAC69CE0F9FC0DA0C93A69</string>
 		</dict>
 		<key>AD92E692E3EB5F8CA6C4F317</key>
 		<dict>
@@ -677,7 +701,7 @@
 			<key>files</key>
 			<array>
 				<string>E33114FFAA446C3A2AC03D59</string>
-				<string>9829D9785C649120DEF7ACA6</string>
+				<string>661170B0A10BE06A68E0C70D</string>
 			</array>
 			<key>runOnlyForDeploymentPostprocessing</key>
 			<string>0</string>
@@ -706,12 +730,14 @@
 				<string>63EAC7C6F0207CACC9DF5F4F</string>
 				<string>ED9FE966BDCC68129F59E63F</string>
 				<string>7BBA80460AF490ADB77ABC2A</string>
+				<string>EF7FDE32EB55E35E5D79EED3</string>
 				<string>D0F70CD1F1826971CD16899A</string>
 				<string>70DDEB384A60A7BCC6BC659F</string>
 				<string>BF126A64F1D1A756D9C7E656</string>
 				<string>5C7223930E216B667DB3838F</string>
 				<string>EE576DEFE51A407E29826DAD</string>
 				<string>A02001656A0E6DDF6A804F71</string>
+				<string>C97D4044E1AC0D1395533A1D</string>
 				<string>C74240B9D8A91708E9EA3BD3</string>
 				<string>C51DC18A63DBBFD9E4AE04CC</string>
 				<string>F92F1B0EED6493CCB316AE77</string>
@@ -853,7 +879,7 @@
 			<key>packageProductDependencies</key>
 			<array>
 				<string>42E3F977141D2B440E78A967</string>
-				<string>A848D420CA57707138050892</string>
+				<string>F2BAC69CE0F9FC0DA0C93A69</string>
 			</array>
 		</dict>
 		<key>00F17A1B4ABC327006D52C8D</key>
@@ -1044,7 +1070,6 @@
 			<key>packageReferences</key>
 			<array>
 				<string>4C62EC40DF63DF0873D128AE</string>
-				<string>2514B0142C454E0DD57112E2</string>
 			</array>
 		</dict>
 	</dict>
