@@ -52,8 +52,10 @@ private struct LiveCredentials: Decodable {
         catch { throw LiveCheckError("Check azureSpeechEndpoint and azureSpeechKey in .env.live.json.") }
     }
     func validateAI() throws {
-        do { _ = try aiClient() }
-        catch { throw LiveCheckError("Check aiBaseUrl, aiKey, aiModel, aiProvider, and thinking in .env.live.json.") }
+        do {
+            guard !aiModel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw ImportError.invalidResponse }
+            _ = try aiClient()
+        } catch { throw LiveCheckError("Check aiBaseUrl, aiKey, aiModel, aiProvider, and thinking in .env.live.json.") }
     }
     func aiClient() throws -> AIClient {
         try AIClient(baseURL: aiBaseURL, model: aiModel, key: aiKey, api: aiAPI, thinking: thinking)

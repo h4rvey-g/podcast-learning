@@ -4,7 +4,7 @@ import PodcastCore
 
 struct LibraryView: View {
     @Environment(AppStore.self) private var store
-    @Environment(SettingsStore.self) private var settings
+    @Environment(ClipPlayer.self) private var player
     @Environment(\.scenePhase) private var scenePhase
     @Query(sort: \Transcript.createdAt, order: .reverse) private var transcripts: [Transcript]
     @Query private var memories: [WordMemory]
@@ -13,12 +13,13 @@ struct LibraryView: View {
     @State private var sharedText: String?
     @State private var showSettings = false
     @State private var path: [Transcript] = []
+    @State private var pendingRemoval: Transcript?
     private var filtered: [Transcript] { transcripts.filter { search.isEmpty || $0.title.localizedCaseInsensitiveContains(search) || $0.author.localizedCaseInsensitiveContains(search) } }
     var body: some View {
         NavigationStack(path: $path) {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 14) {
-                    Text("Library").font(.largeTitle.bold()).padding(.bottom, 20)
+            List {
+                Group {
+                    Text("Library").font(.largeTitle.bold()).padding(.bottom, 20).accessibilityAddTraits(.isHeader)
                     if filtered.isEmpty {
                         ContentUnavailableView(search.isEmpty ? "Your Listening, Your Learning" : "No Matching Transcripts", systemImage: search.isEmpty ? "headphones" : "magnifyingglass",
                             description: Text(search.isEmpty ? "Import an Apple Podcasts or Bilibili link, or English text to start learning." : "Try another title or show name."))
@@ -26,9 +27,20 @@ struct LibraryView: View {
                     }
                     ForEach(filtered) { transcript in
                         NavigationLink(value: transcript) { libraryCard(transcript) }.buttonStyle(.plain)
+                            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                                Button("Remove", systemImage: "trash") { pendingRemoval = transcript }.tint(.red)
+                            }
+                            .contextMenu {
+                                Button("Remove from Library", systemImage: "trash", role: .destructive) { pendingRemoval = transcript }
+                            }
+                            .accessibilityAction(named: "Remove from Library") { pendingRemoval = transcript }
                     }
-                }.padding(16)
-            }.background(Palette.background)
+                }
+                .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
+                .listRowSeparator(.hidden)
+                .listRowBackground(Color.clear)
+            }.listStyle(.plain).listRowSpacing(14).contentMargins(.vertical, 16, for: .scrollContent)
+                .scrollContentBackground(.hidden).background(Palette.background)
                 .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Settings", systemImage: "gearshape") { showSettings = true }.labelStyle(.iconOnly) } }
                 .safeAreaInset(edge: .bottom) {
                     HStack(spacing: 10) {
@@ -42,6 +54,12 @@ struct LibraryView: View {
                 .navigationDestination(for: Transcript.self) { ReaderView(transcript: $0) }
                 .sheet(isPresented: $showImport) { ImportView(initialText: sharedText ?? "") { path.append($0); sharedText = nil } }
                 .navigationDestination(isPresented: $showSettings) { SettingsView() }
+        }
+        .confirmationDialog("Remove from Library?", isPresented: Binding(get: { pendingRemoval != nil }, set: { if !$0 { pendingRemoval = nil } }), titleVisibility: .visible, presenting: pendingRemoval) { transcript in
+            Button("Remove", role: .destructive) { remove(transcript) }
+            Button("Cancel", role: .cancel) { pendingRemoval = nil }
+        } message: { transcript in
+            Text("“\(transcript.title)” and its downloaded media will be deleted. Your global word-review history will be kept. Work already sent to a provider may still be billed.")
         }
         .alert("Something Went Wrong", isPresented: Binding(get: { store.error != nil }, set: { if !$0 { store.error = nil } })) { Button("Close", role: .cancel) { store.error = nil } } message: { Text(store.error ?? "") }
         .task { await store.consumeSharedImports() }
@@ -59,6 +77,14 @@ struct LibraryView: View {
                 } catch { store.error = error.localizedDescription }
             } else if url.host == "podcasts.apple.com" || (try? BilibiliLink(url.absoluteString)) != nil { sharedText = url.absoluteString; showImport = true }
         }
+    }
+    private func remove(_ transcript: Transcript) {
+        let id = transcript.id
+        pendingRemoval = nil
+        do {
+            try store.removeTranscript(transcript)
+            if player.transcriptID == id { player.stop() }
+        } catch { store.error = "Could not remove this transcript: \(error.localizedDescription)" }
     }
     private func libraryCard(_ transcript: Transcript) -> some View {
         let mastered = transcript.activeItems.filter { item in memories.contains { $0.key == item.key && $0.box == 5 } }.count

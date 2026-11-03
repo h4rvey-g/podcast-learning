@@ -41,18 +41,32 @@ public struct AIClient: Sendable {
                 thinking: ThinkingLevel = .providerDefault, fetch: FetchFunction? = nil) throws {
         guard let url = URL(string: baseURL.trimmingCharacters(in: .whitespacesAndNewlines)),
               url.scheme == "https", url.host != nil, url.user == nil, url.password == nil,
-              url.port == nil, url.query == nil, url.fragment == nil,
-              !model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            throw ImportError.service("Use an HTTPS provider base URL, such as https://api.openai.com/v1, and a model name.")
+              url.port == nil, url.query == nil, url.fragment == nil else {
+            throw ImportError.service("Use an HTTPS provider base URL, such as https://api.openai.com/v1.")
         }
         guard !key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw ImportError.service("Add your API key in Settings to use AI analysis.") }
         self.baseURL = url.absoluteString; self.model = model; self.key = key
         self.api = api; self.thinking = thinking; self.fetch = fetch
     }
+    public func testConnection() async throws {
+        do {
+            _ = try await generate(system: "Reply with OK.", input: "Connection test", json: false, maxTokens: 32, connectionTest: true)
+        } catch is CancellationError where !Task.isCancelled {
+            throw ImportError.service("The connection test timed out after 15 seconds. Check your provider or try again.")
+        } catch let error as URLError where error.code == .timedOut {
+            throw ImportError.service("The connection test timed out after 15 seconds. Check your provider or try again.")
+        }
+    }
     public func completion(system: String, input: String, json: Bool = false, maxTokens: Int? = nil) async throws -> String {
+        try await generate(system: system, input: input, json: json, maxTokens: maxTokens, connectionTest: false)
+    }
+    private func generate(system: String, input: String, json: Bool, maxTokens: Int?, connectionTest: Bool) async throws -> String {
+        guard !model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw ImportError.service("Choose a model in Settings first.") }
         let send = fetch ?? defaultFetchFunction()
-        let thinking = thinking, api = api
+        let thinking = connectionTest ? .providerDefault : thinking, api = api
         let checkedFetch: FetchFunction = { request in
+            var request = request
+            if connectionTest { request.timeoutInterval = 15 }
             if thinking != .providerDefault {
                 let body = request.httpBody.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
                 let applied: Bool
@@ -97,8 +111,13 @@ public struct AIClient: Sendable {
                 output: output, providerOptions: api == .chat || api == .responses ? ["openai": ["store": .bool(false)]] : nil,
                 settings: CallSettings(maxOutputTokens: maxTokens ?? (json ? 12000 : 2000),
                     reasoning: thinking == .providerDefault ? nil : LanguageModelV4ReasoningEffort(rawValue: thinking.rawValue),
-                    maxRetries: 0, abortSignal: { Task.isCancelled }, timeout: .milliseconds(180_000)))
-            guard result.finishReason != .length, !result.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw ImportError.invalidResponse }
+                    maxRetries: 0, abortSignal: { Task.isCancelled }, timeout: .milliseconds(connectionTest ? 15_000 : 180_000)))
+            // A reasoning model can spend the probe's entire budget without emitting text.
+            if connectionTest {
+                guard result.finishReason == .stop || result.finishReason == .length else { throw ImportError.invalidResponse }
+            } else {
+                guard result.finishReason != .length, !result.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw ImportError.invalidResponse }
+            }
             return result.text
         }
         do {
@@ -108,6 +127,81 @@ public struct AIClient: Sendable {
             // Provider bodies may echo input or credentials; keep them out of UI and test diagnostics.
             throw ImportError.service("The AI provider could not complete the request (HTTP \(failure.statusCode ?? 0)). Check the model, thinking level, key, and provider settings.")
         }
+    }
+    public func availableModels() async throws -> [String] {
+        do {
+            return try await withThrowingTaskGroup(of: [String].self) { group in
+                group.addTask { try await loadModels() }
+                group.addTask {
+                    try await Task.sleep(for: .seconds(15))
+                    throw URLError(.timedOut)
+                }
+                defer { group.cancelAll() }
+                return try await group.next()!
+            }
+        } catch let error as URLError where error.code == .timedOut {
+            throw ImportError.service("Loading models timed out after 15 seconds. Try again or add a custom model.")
+        }
+    }
+    private func loadModels() async throws -> [String] {
+        struct Page: Decodable {
+            struct Model: Decodable { let id: String }
+            struct GeminiModel: Decodable { let name: String; let supportedGenerationMethods: [String]? }
+            let data: [Model]?
+            let models: [GeminiModel]?
+            let has_more: Bool?
+            let last_id: String?
+            let nextPageToken: String?
+        }
+        let endpoint = URL(string: baseURL)!.appendingPathComponent("models")
+        let send = fetch ?? defaultFetchFunction()
+        var models = Set<String>(), cursors = Set<String>()
+        var cursor: String?
+        repeat {
+            try Task.checkCancellation()
+            var url = URLComponents(url: endpoint, resolvingAgainstBaseURL: false)!
+            if let cursor {
+                url.queryItems = [URLQueryItem(name: api == .gemini ? "pageToken" : "after_id", value: cursor)]
+            }
+            var request = URLRequest(url: url.url!, timeoutInterval: 15)
+            request.httpMethod = "GET"
+            request.fetchRedirectMode = .error
+            request.setValue("application/json", forHTTPHeaderField: "Accept")
+            switch api {
+            case .chat, .responses:
+                request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
+            case .anthropic:
+                request.setValue(key, forHTTPHeaderField: "x-api-key")
+                request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
+            case .gemini:
+                request.setValue(key, forHTTPHeaderField: "x-goog-api-key")
+            }
+            let response = try await send(request)
+            guard let http = response.urlResponse as? HTTPURLResponse else { throw ImportError.invalidResponse }
+            guard (200...299).contains(http.statusCode) else {
+                throw ImportError.service("Could not load models (HTTP \(http.statusCode)). Check the provider and saved key, or add a custom model if listing is unsupported.")
+            }
+            let page = try JSONDecoder().decode(Page.self, from: await response.body.collectData())
+            if api == .gemini {
+                guard let entries = page.models else { throw ImportError.invalidResponse }
+                for entry in entries where entry.supportedGenerationMethods?.contains("generateContent") == true {
+                    models.insert(entry.name.hasPrefix("models/") ? String(entry.name.dropFirst(7)) : entry.name)
+                }
+                cursor = page.nextPageToken
+            } else {
+                guard let entries = page.data else { throw ImportError.invalidResponse }
+                models.formUnion(entries.map(\.id))
+                cursor = nil
+                if api == .anthropic, page.has_more == true {
+                    guard let lastID = page.last_id, !lastID.isEmpty else { throw ImportError.invalidResponse }
+                    cursor = lastID
+                }
+            }
+            if let next = cursor, !next.isEmpty {
+                guard cursors.insert(next).inserted else { throw ImportError.invalidResponse }
+            } else { cursor = nil }
+        } while cursor != nil
+        return models.filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }.sorted()
     }
     private static func rejectedFormat(_ failure: APICallError) -> Bool {
         guard [400, 422].contains(failure.statusCode ?? 0) else { return false }

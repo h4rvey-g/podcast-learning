@@ -9,8 +9,9 @@ private actor ProviderStub {
     let failure: Int?
     let parameter: String
     let finish: String
-    init(failure: Int? = nil, parameter: String = "response_format", finish: String = "stop") {
-        self.failure = failure; self.parameter = parameter; self.finish = finish
+    let text: String
+    init(failure: Int? = nil, parameter: String = "response_format", finish: String = "stop", text: String = "OK") {
+        self.failure = failure; self.parameter = parameter; self.finish = finish; self.text = text
     }
     func fetch(_ request: URLRequest) throws -> FetchResponse {
         requests.append(request)
@@ -26,19 +27,19 @@ private actor ProviderStub {
             }
         } else if request.url?.path.hasSuffix("/responses") == true {
             body = ["id": "resp_test", "object": "response", "created_at": 1, "status": "completed", "model": "gpt-6.1-sol",
-                    "output": [["id": "msg_test", "type": "message", "role": "assistant", "status": "completed", "content": [["type": "output_text", "text": "OK", "annotations": []]]]],
+                    "output": [["id": "msg_test", "type": "message", "role": "assistant", "status": "completed", "content": [["type": "output_text", "text": text, "annotations": []]]]],
                     "usage": ["input_tokens": 1, "output_tokens": 1, "total_tokens": 2]]
         } else if request.url?.path.hasSuffix("/messages") == true {
             body = ["id": "msg_test", "type": "message", "role": "assistant", "model": "claude-sonnet-4-6",
-                    "content": [["type": "text", "text": "OK"]], "stop_reason": finish == "length" ? "max_tokens" : "end_turn",
+                    "content": [["type": "text", "text": text]], "stop_reason": finish == "length" ? "max_tokens" : "end_turn",
                     "stop_sequence": NSNull(), "usage": ["input_tokens": 1, "output_tokens": 1]]
         } else if request.url?.path.hasSuffix(":generateContent") == true {
-            body = ["candidates": [["content": ["role": "model", "parts": [["text": "OK"]]],
+            body = ["candidates": [["content": ["role": "model", "parts": [["text": text]]],
                                     "finishReason": finish == "length" ? "MAX_TOKENS" : "STOP"]],
                     "usageMetadata": ["promptTokenCount": 1, "candidatesTokenCount": 1, "totalTokenCount": 2]]
         } else {
             body = ["id": "chat_test", "object": "chat.completion", "created": 1, "model": "gpt-6.1-sol",
-                    "choices": [["index": 0, "message": ["role": "assistant", "content": "OK"], "finish_reason": finish]],
+                    "choices": [["index": 0, "message": ["role": "assistant", "content": text], "finish_reason": finish]],
                     "usage": ["prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2]]
         }
         return FetchResponse(body: .data(try JSONSerialization.data(withJSONObject: body)),
@@ -222,4 +223,149 @@ private let nativeProviders: [(AIProviderAPI, String)] = [(.anthropic, "claude-s
                                   fetch: { try await stub.fetch($0) })
         await #expect(throws: ImportError.self) { try await client.completion(system: "Reply OK", input: "Test") }
     }
+}
+
+@Test func connectionProbeIsSmallAndBounded() async throws {
+    for (api, model) in [(AIProviderAPI.chat, "gpt-5.1"), (.responses, "gpt-5.1")] + nativeProviders {
+        let stub = ProviderStub()
+        let client = try AIClient(baseURL: "https://provider.example/v1", model: model, key: "test-key", api: api, thinking: .high,
+                                  fetch: { try await stub.fetch($0) })
+        try await client.testConnection()
+        let requests = await stub.snapshot()
+        #expect(requests.count == 1)
+        let request = try #require(requests.first)
+        let body = try #require(JSONSerialization.jsonObject(with: request.httpBody!) as? [String: Any])
+        let config = body["generationConfig"] as? [String: Any]
+        #expect((body["max_completion_tokens"] as? Int ?? body["max_tokens"] as? Int ?? body["max_output_tokens"] as? Int ?? config?["maxOutputTokens"] as? Int) == 32)
+        #expect(body["reasoning_effort"] == nil && body["reasoning"] == nil && body["thinking"] == nil)
+        #expect(config?["thinkingConfig"] == nil)
+        #expect((body["output_config"] as? [String: Any])?["effort"] == nil)
+        #expect(request.timeoutInterval <= 15)
+    }
+}
+
+@Test func connectionProbeAcceptsBudgetExhaustionButNotProviderFailures() async throws {
+    let truncated = ProviderStub(finish: "length", text: "")
+    let client = try AIClient(baseURL: "https://provider.example/v1", model: "gpt-5.1", key: "test-key",
+                              fetch: { try await truncated.fetch($0) })
+    try await client.testConnection()
+    for status in [401, 429, 500] {
+        let stub = ProviderStub(failure: status)
+        let failing = try AIClient(baseURL: "https://provider.example/v1", model: "gpt-5.1", key: "test-key",
+                                   fetch: { try await stub.fetch($0) })
+        await #expect(throws: ImportError.self) { try await failing.testConnection() }
+        #expect(await stub.snapshot().count == 1)
+    }
+}
+
+@Test func connectionProbeCancelsSlowProvidersAtDeadline() async throws {
+    let stub = ProviderStub()
+    let client = try AIClient(baseURL: "https://provider.example/v1", model: "gpt-5.1", key: "test-key", fetch: {
+        try await Task.sleep(for: .seconds(60))
+        return try await stub.fetch($0)
+    })
+    let start = ContinuousClock.now
+    do {
+        try await client.testConnection()
+        Issue.record("A slow provider must time out")
+    } catch {
+        #expect(error.localizedDescription.contains("timed out after 15 seconds"))
+    }
+    #expect(start.duration(to: .now) < .seconds(18))
+    #expect(await stub.snapshot().isEmpty)
+}
+
+private actor ModelCatalogStub {
+    private var requests: [URLRequest] = []
+    let pages: [String]
+    let status: Int
+    init(_ pages: [String], status: Int = 200) { self.pages = pages; self.status = status }
+    func fetch(_ request: URLRequest) throws -> FetchResponse {
+        let index = requests.count
+        requests.append(request)
+        guard index < pages.count else { throw ImportError.invalidResponse }
+        return FetchResponse(body: .data(Data(pages[index].utf8)),
+                             urlResponse: HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil, headerFields: nil)!)
+    }
+    func snapshot() -> [URLRequest] { requests }
+}
+
+@Test func openAIModelsUseConfiguredEndpointAndSavedCredentials() async throws {
+    for api in [AIProviderAPI.chat, .responses] {
+        let stub = ModelCatalogStub([#"{"data":[{"id":"z-custom"},{"id":"a-chat"},{"id":"z-custom"},{"id":""}]}"#])
+        let client = try AIClient(baseURL: "https://provider.example/custom/v1/", model: "current-custom", key: "test-key", api: api,
+                                  fetch: { try await stub.fetch($0) })
+        #expect(try await client.availableModels() == ["a-chat", "z-custom"])
+        let request = try #require(await stub.snapshot().first)
+        #expect(request.url?.path == "/custom/v1/models")
+        #expect(request.httpMethod == "GET" && request.httpBody == nil)
+        #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer test-key")
+        #expect(request.timeoutInterval == 15)
+        #expect(request.fetchRedirectMode == .error)
+    }
+}
+
+@Test func nativeModelCatalogsFollowPaginationAndUseNativeAuthentication() async throws {
+    for api in [AIProviderAPI.anthropic, .gemini] {
+        let pages = api == .anthropic ? [
+            #"{"data":[{"id":"claude-a"}],"has_more":true,"last_id":"cursor &/one"}"#,
+            #"{"data":[{"id":"claude-b"}],"has_more":false}"#
+        ] : [
+            #"{"models":[{"name":"models/gemini-a","supportedGenerationMethods":["generateContent"]},{"name":"models/embedding","supportedGenerationMethods":["embedContent"]}],"nextPageToken":"cursor &/one"}"#,
+            #"{"models":[{"name":"models/gemini-b","supportedGenerationMethods":["generateContent"]}]}"#
+        ]
+        let stub = ModelCatalogStub(pages)
+        let client = try AIClient(baseURL: "https://provider.example/v1", model: "current-custom", key: "test-key", api: api,
+                                  fetch: { try await stub.fetch($0) })
+        #expect(try await client.availableModels() == (api == .anthropic ? ["claude-a", "claude-b"] : ["gemini-a", "gemini-b"]))
+        let requests = await stub.snapshot()
+        #expect(requests.count == 2)
+        #expect(requests[0].url?.query == nil)
+        let query = URLComponents(url: requests[1].url!, resolvingAgainstBaseURL: false)?.queryItems
+        #expect(query == [URLQueryItem(name: api == .anthropic ? "after_id" : "pageToken", value: "cursor &/one")])
+        for request in requests {
+            #expect(request.value(forHTTPHeaderField: "Authorization") == nil)
+            #expect(request.value(forHTTPHeaderField: api == .anthropic ? "x-api-key" : "x-goog-api-key") == "test-key")
+            if api == .anthropic { #expect(request.value(forHTTPHeaderField: "anthropic-version") == "2023-06-01") }
+        }
+    }
+}
+
+@Test func modelCatalogRejectsErrorsMalformedPagesAndRepeatedCursors() async throws {
+    for (status, body) in [(401, #"{"error":"test-key should never be displayed"}"#), (404, "not supported"), (200, #"{"unknown":[]}"#)] {
+        let stub = ModelCatalogStub([body], status: status)
+        let client = try AIClient(baseURL: "https://provider.example/v1", model: "custom", key: "test-key", fetch: { try await stub.fetch($0) })
+        do {
+            _ = try await client.availableModels()
+            Issue.record("Invalid catalog should fail")
+        } catch { #expect(!error.localizedDescription.contains("test-key")) }
+        #expect(await stub.snapshot().count == 1)
+    }
+    let repeated = #"{"data":[{"id":"claude-a"}],"has_more":true,"last_id":"same"}"#
+    let stub = ModelCatalogStub([repeated, repeated])
+    let client = try AIClient(baseURL: "https://provider.example/v1", model: "custom", key: "test-key", api: .anthropic, fetch: { try await stub.fetch($0) })
+    await #expect(throws: ImportError.self) { try await client.availableModels() }
+    #expect(await stub.snapshot().count == 2)
+}
+
+@Test func modelCatalogCancelsSlowProvidersAtDeadline() async throws {
+    let client = try AIClient(baseURL: "https://provider.example/v1", model: "custom", key: "test-key", fetch: { _ in
+        try await Task.sleep(for: .seconds(60))
+        throw ImportError.invalidResponse
+    })
+    let start = ContinuousClock.now
+    do {
+        _ = try await client.availableModels()
+        Issue.record("A slow catalog must time out")
+    } catch { #expect(error.localizedDescription.contains("timed out after 15 seconds")) }
+    #expect(start.duration(to: .now) < .seconds(18))
+}
+
+@Test func modelDiscoveryDoesNotRequireASelectedModel() async throws {
+    let stub = ModelCatalogStub([#"{"data":[{"id":"new-model"}]}"#])
+    let client = try AIClient(baseURL: "https://provider.example/v1", model: "", key: "test-key", fetch: { try await stub.fetch($0) })
+    #expect(try await client.availableModels() == ["new-model"])
+    await #expect(throws: ImportError.self) { try await client.testConnection() }
+    await #expect(throws: ImportError.self) { try await client.completion(system: "Reply OK", input: "Test") }
+    #expect(await stub.snapshot().count == 1)
 }

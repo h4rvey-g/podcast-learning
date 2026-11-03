@@ -29,6 +29,20 @@ import PodcastCore
         try context.save()
     }
     func save() { do { try context.save() } catch { self.error = "Could not save your changes: \(error.localizedDescription)" } }
+    func removeTranscript(_ transcript: Transcript) throws {
+        let id = transcript.id
+        context.delete(transcript)
+        do { try context.save() }
+        catch { context.rollback(); throw error }
+        downloading.remove(id); transcribing.remove(id)
+        audioErrors[id] = nil; downloadProgress[id] = nil; transcriptionProgress[id] = nil; transcriptionStatus[id] = nil
+        // Transfers that finish later clean up again in their defers.
+        removeMedia(id)
+    }
+    private func removeMedia(_ id: UUID) {
+        do { try AudioStore.delete(id) }
+        catch { self.error = "Transcript removed, but its downloaded media could not be deleted: \(error.localizedDescription)" }
+    }
     func importText(_ text: String, title: String, fileExtension: String = "txt", level: String? = nil) throws -> Transcript {
         let paragraphs = try TextImporter.paragraphs(text, fileExtension: fileExtension)
         let name = title.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -80,10 +94,13 @@ import PodcastCore
         return transcript
     }
     func transcribe(_ transcript: Transcript) async {
-        guard transcript.orderedSegments.isEmpty, !downloading.contains(transcript.id), transcribing.insert(transcript.id).inserted else { return }
+        guard transcript.modelContext != nil, transcript.orderedSegments.isEmpty, !downloading.contains(transcript.id), transcribing.insert(transcript.id).inserted else { return }
         let id = transcript.id
         downloadProgress[id] = nil; transcriptionProgress[id] = nil
-        defer { transcribing.remove(id); downloadProgress[id] = nil; transcriptionProgress[id] = nil; transcriptionStatus[id] = nil }
+        defer {
+            transcribing.remove(id); downloadProgress[id] = nil; transcriptionProgress[id] = nil; transcriptionStatus[id] = nil
+            if transcript.modelContext == nil { removeMedia(id) }
+        }
         transcript.keepVideo = transcript.keepVideo && settings.keepBilibiliVideo
         transcript.transcriptionState = "pending"; transcript.transcriptionError = nil
         do {
@@ -98,11 +115,13 @@ import PodcastCore
                 let client = try MAITranscriber(endpoint: settings.speechEndpoint, key: APIKey.read(account: "azureSpeech"), model: settings.speechModel)
                 transcriptionStatus[id] = "Downloading audio…"
                 try await downloadBilibili(transcript)
+                guard transcript.modelContext != nil else { return }
                 let wav = directory.appendingPathComponent("audio.wav")
                 downloadProgress[id] = nil
                 transcriptionStatus[id] = "Preparing audio…"
                 guard let source = AudioStore.localURL(id) else { throw ImportError.invalidResponse }
                 try await Task.detached(priority: .utility) { try AudioPreparation.wav(from: source, to: wav) }.value
+                guard transcript.modelContext != nil else { return }
                 guard settings.transcriptionConsent else { throw ImportError.service("Audio transcription was turned off. Your downloaded audio is kept.") }
                 transcriptionStatus[id] = "Uploading audio…"
                 result = try await client.transcribe(wav, resultFile: resultFile) { [weak self] fraction in
@@ -113,6 +132,7 @@ import PodcastCore
                     }
                 }
             }
+            guard transcript.modelContext != nil else { return }
             try result.apply(to: transcript)
             marker.mark(transcript, target: CEFR(rawValue: transcript.targetLevelOverride ?? "") ?? settings.level)
             transcript.transcriptionState = "done"
@@ -121,6 +141,7 @@ import PodcastCore
             try? FileManager.default.removeItem(at: directory)
             if settings.aiConsent { Task { await analyze(transcript) } }
         } catch {
+            guard transcript.modelContext != nil else { return }
             // A failed save must not leave unsaved segments that block applying the cached result.
             if transcript.transcriptionState == "done" {
                 for item in transcript.items ?? [] { context.delete(item) }
@@ -139,17 +160,23 @@ import PodcastCore
         let needsVideo = transcript.keepVideo && !FileManager.default.fileExists(atPath: videoFile.path)
         guard needsAudio || needsVideo else { return }
         let media = try await BilibiliClient().resolve(BilibiliLink(source), includeVideo: needsVideo)
+        guard transcript.modelContext != nil else { throw CancellationError() }
         let directory = try AudioStore.workDirectory(id)
         if needsAudio {
             try await ReliableTransfer.download(media.audio, to: audioFile, headers: BilibiliClient.headers) { [weak self] fraction in
-                Task { @MainActor in self?.downloadProgress[id] = fraction }
+                Task { @MainActor in
+                    guard let self, self.downloading.contains(id) || self.transcribing.contains(id) else { return }
+                    self.downloadProgress[id] = fraction
+                }
             }
+            guard transcript.modelContext != nil else { throw CancellationError() }
         }
         if needsVideo && !media.link.isAudio {
             transcriptionStatus[id] = "Downloading video…"
             let track = directory.appendingPathComponent("video-track.mp4")
             if !FileManager.default.fileExists(atPath: track.path) {
                 try await ReliableTransfer.download(media.video, to: track, headers: BilibiliClient.headers)
+                guard transcript.modelContext != nil else { throw CancellationError() }
             }
             try await AudioPreparation.video(audio: audioFile, track: track, to: videoFile)
         }
@@ -161,18 +188,28 @@ import PodcastCore
         if settings.aiConsent { Task { await analyze(transcript) } }
     }
     func analyze(_ transcript: Transcript) async {
-        guard !transcript.orderedSegments.isEmpty, analyzing.insert(transcript.id).inserted else { return }
-        defer { analyzing.remove(transcript.id) }
+        guard transcript.modelContext != nil, !transcript.orderedSegments.isEmpty, analyzing.insert(transcript.id).inserted else { return }
+        let id = transcript.id
+        defer { analyzing.remove(id) }
         transcript.analysisState = "pending"; transcript.analysisError = nil; save()
-        do { try await AIAnalyzer(settings: settings).analyze(transcript); transcript.analysisState = "aiDone" }
-        catch { transcript.analysisState = "aiFailed"; transcript.analysisError = error.localizedDescription }
+        do {
+            try await AIAnalyzer(settings: settings).analyze(transcript)
+            guard transcript.modelContext != nil else { return }
+            transcript.analysisState = "aiDone"
+        } catch {
+            guard transcript.modelContext != nil else { return }
+            transcript.analysisState = "aiFailed"; transcript.analysisError = error.localizedDescription
+        }
         save()
     }
     func downloadAudio(_ transcript: Transcript) async {
-        guard !transcribing.contains(transcript.id), downloading.insert(transcript.id).inserted else { return }
+        guard transcript.modelContext != nil, !transcribing.contains(transcript.id), downloading.insert(transcript.id).inserted else { return }
         let id = transcript.id
         audioErrors[id] = nil; downloadProgress[id] = nil
-        defer { downloading.remove(id); downloadProgress[id] = nil }
+        defer {
+            downloading.remove(id); downloadProgress[id] = nil
+            if transcript.modelContext == nil { removeMedia(id) }
+        }
         do {
             if let source = transcript.sourceURL, (try? BilibiliLink(source)) != nil {
                 try await downloadBilibili(transcript)
@@ -183,6 +220,7 @@ import PodcastCore
                       let remote = try await AudioResolver.resolve(EpisodeLink(source), title: transcript.title) else {
                     throw ImportError.service("No episode audio was found. You can still use text to speech.")
                 }
+                guard transcript.modelContext != nil else { return }
                 transcript.remoteAudioURL = remote.url.absoluteString; transcript.audioDuration = remote.duration; save()
             }
             guard let value = transcript.remoteAudioURL, let url = URL(string: value) else { throw ImportError.invalidURL }
@@ -192,7 +230,7 @@ import PodcastCore
                     self.downloadProgress[id] = fraction
                 }
             }
-        } catch { audioErrors[id] = error.localizedDescription }
+        } catch { if transcript.modelContext != nil { audioErrors[id] = error.localizedDescription } }
     }
     func changeLevel(_ transcript: Transcript, to value: String?) {
         transcript.targetLevelOverride = value

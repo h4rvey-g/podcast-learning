@@ -5,6 +5,7 @@ import Alamofire
 @testable import PodcastCore
 
 private let maiJSON = #"{"durationMilliseconds":3000,"phrases":[{"text":"Hello world.","offsetMilliseconds":500,"durationMilliseconds":1500,"speaker":0}]}"#
+private let bilibiliShareText = "【【每日英语新闻】摄入过多超加工食品易致大脑损伤！痴呆症！|中英精校|重点标注|生词注释|英语精听|医疗健康|地道美语-哔哩哔哩】 https://b23.tv/s5ncPiE"
 
 @Test func bilibiliLinksValidateIdentityAndParts() throws {
     let audio = try BilibiliLink("https://www.bilibili.com/audio/au777180?from=share")
@@ -15,8 +16,37 @@ private let maiJSON = #"{"durationMilliseconds":3000,"phrases":[{"text":"Hello w
     #expect(try BilibiliLink("https://www.bilibili.com/video/av170001").id == "av170001")
     #expect(try BilibiliLink("A video title https://b23.tv/AbC123").isShort)
     #expect(try BilibiliLink("Shared title https://www.bilibili.com/video/av170001").id == "av170001")
-    for bad in ["http://www.bilibili.com/audio/au1", "https://bilibili.com.evil.test/audio/au1", "https://evil@www.bilibili.com/audio/au1", "https://www.bilibili.com/video/BVbad", "https://www.bilibili.com/video/av1?p=0", "https://www.bilibili.com/audio/au0", "https://www.bilibili.com/audio/au1?p=2", "https://www.bilibili.com/video/av1/extra"] {
+    for bad in ["http://www.bilibili.com/audio/au1", "https://bilibili.com.evil.test/audio/au1", "https://evil@www.bilibili.com/audio/au1", "https://www.bilibili.com/video/BVbad", "https://www.bilibili.com/video/av1?p=0", "https://www.bilibili.com/audio/au0", "https://www.bilibili.com/audio/au1?p=2", "https://www.bilibili.com/video/av1/extra", "https://www.bilibili.com/not-a-locale/video/av1", "https://www.bilibili.com/zh-Hans/video/av1/extra", "https://www.bilibili.com/zh-Hans/audio/au1?p=2", "https://bilibili.com.evil.test/zh-Hans/video/av1"] {
         #expect(throws: ImportError.self) { try BilibiliLink(bad) }
+    }
+}
+
+@Test(arguments: [bilibiliShareText, bilibiliShareText.replacingOccurrences(of: " https://", with: "\nhttps://")])
+func bilibiliChineseShareTextExtractsLink(input: String) throws {
+    let link = try BilibiliLink(input)
+    #expect(link.isShort && link.id == "s5ncPiE" && link.page == 1)
+    #expect(link.url.absoluteString == "https://b23.tv/s5ncPiE")
+}
+
+@Test(arguments: ["zh-Hans", "zh-Hant", "en"])
+func bilibiliLocalizedLinksPreserveIdentityAndParts(locale: String) throws {
+    let video = try BilibiliLink("https://www.bilibili.com/\(locale)/video/BV1ScHK6pEku/?p=2&from=share")
+    #expect(video.id == "BV1ScHK6pEku" && video.page == 2)
+    #expect(video.episodeID == "bilibili:BV1ScHK6pEku:2")
+    #expect(video.url.absoluteString == "https://www.bilibili.com/video/BV1ScHK6pEku?p=2")
+    let audio = try BilibiliLink("Shared title https://m.bilibili.com/\(locale)/audio/au777180?from=share")
+    #expect(audio.isAudio && audio.url.absoluteString == "https://www.bilibili.com/audio/au777180")
+}
+
+@Test(arguments: ["http://i0.hdslb.com/bfs/archive/cover.jpg", "https://i0.hdslb.com/bfs/archive/cover.jpg", "//i0.hdslb.com/bfs/archive/cover.jpg"])
+func bilibiliCoversUseHTTPS(value: String) {
+    #expect(BilibiliClient.coverURL(value)?.absoluteString == "https://i0.hdslb.com/bfs/archive/cover.jpg")
+}
+
+@Test func bilibiliMissingOrInvalidCoversKeepThePlaceholder() {
+    #expect(BilibiliClient.coverURL(nil) == nil)
+    for value in ["", "cover.jpg", "file:///tmp/cover.jpg", "javascript:alert(1)", "https://user:password@i0.hdslb.com/cover.jpg"] {
+        #expect(BilibiliClient.coverURL(value) == nil)
     }
 }
 
@@ -83,7 +113,7 @@ private final class TransferStub: URLProtocol, @unchecked Sendable {
         else if request.url!.path.contains("web/url") {
             json = "{\"code\":0,\"data\":{\"type\":\(mode == "preview" ? -1 : 1),\"cdns\":[\"https://cdn.example.test/audio.m4a\",\"https://backup.example.test/audio.m4a\"]}}"
         } else if request.url!.path.hasSuffix("/view") {
-            json = #"{"code":0,"data":{"bvid":"BV1xx411c7mD","title":"Study video","owner":{"name":"Teacher"},"pages":[{"cid":11,"page":1,"part":"First","duration":3},{"cid":22,"page":2,"part":"Second","duration":3}]}}"#
+            json = #"{"code":0,"data":{"bvid":"BV1xx411c7mD","title":"Study video","pic":"http://i0.hdslb.com/bfs/archive/cover.jpg","owner":{"name":"Teacher"},"pages":[{"cid":11,"page":1,"part":"First","duration":3},{"cid":22,"page":2,"part":"Second","duration":3}]}}"#
         } else if request.url!.path.hasSuffix("/nav") {
             json = #"{"code":-101,"data":{"wbi_img":{"img_url":"https://example.test/7cd084941338484aae1ad9425b84077c.png","sub_url":"https://example.test/4932caff0ff746eab6f01bf08b70ac45.png"}}}"#
         } else if request.url!.path.hasSuffix("/playurl") {
@@ -96,7 +126,8 @@ private final class TransferStub: URLProtocol, @unchecked Sendable {
             client?.urlProtocol(self, didLoad: Data(repeating: 42, count: 65536))
             client?.urlProtocolDidFinishLoading(self); return
         }
-        let responseURL = request.url!.host == "b23.tv" ? URL(string: "https://www.bilibili.com/video/BV1xx411c7mD?p=2")! : request.url!
+        let target = mode == "localizedShortLink" ? "https://www.bilibili.com/zh-Hans/video/BV1ScHK6pEku?p=2" : "https://www.bilibili.com/video/BV1xx411c7mD?p=2"
+        let responseURL = request.url!.host == "b23.tv" ? URL(string: target)! : request.url!
         let response = HTTPURLResponse(url: responseURL, statusCode: status, httpVersion: nil, headerFields: ["Content-Type":"application/json", "Retry-After":"0"])!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: Data(json.utf8)); client?.urlProtocolDidFinishLoading(self)
@@ -132,12 +163,22 @@ private final class UploadMonitor: EventMonitor, @unchecked Sendable {
         TransferStub.reset("success")
         let video = try await client.resolve(BilibiliLink("https://www.bilibili.com/video/av170001?p=2"), includeVideo: true)
         #expect(video.link.page == 2 && video.video.count == 1 && video.audio.count == 1)
+        #expect(video.cover == "https://i0.hdslb.com/bfs/archive/cover.jpg")
+        #expect(audio.cover == nil)
         #expect(TransferStub.snapshot().last?.url?.query?.contains("cid=22") == true)
         #expect(TransferStub.snapshot().last?.url?.query?.contains("w_rid=") == true)
         let expanded = try await client.expand(BilibiliLink("https://b23.tv/AbC123"))
         #expect(expanded.id == "BV1xx411c7mD" && expanded.page == 2)
         let audioOnly = try await client.resolve(BilibiliLink("https://www.bilibili.com/video/BV1xx411c7mD"))
         #expect(audioOnly.video.isEmpty)
+    }
+    @Test(arguments: ["https://b23.tv/mtut2qQ", bilibiliShareText])
+    func bilibiliExpandsLocalizedShortLink(input: String) async throws {
+        let session = session(), client = BilibiliClient(session: session)
+        TransferStub.reset("localizedShortLink")
+        let expanded = try await client.expand(BilibiliLink(input))
+        #expect(expanded.id == "BV1ScHK6pEku" && expanded.page == 2)
+        #expect(expanded.url.absoluteString == "https://www.bilibili.com/video/BV1ScHK6pEku?p=2")
     }
     @Test func downloadFallsBackWithoutReplacingGoodAudioWithErrors() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)

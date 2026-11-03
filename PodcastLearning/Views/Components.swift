@@ -47,7 +47,8 @@ struct CoverArt: View {
         ZStack {
             LinearGradient(colors: [Color(red: 1, green: 0.48, blue: 0.35), Color(red: 0.43, green: 0.29, blue: 1)], startPoint: .topLeading, endPoint: .bottomTrailing)
             Image(systemName: transcript?.episodeID == nil ? "doc.text" : "headphones").font(.system(size: size * 0.42)).foregroundStyle(.white)
-            if let value = transcript?.coverURL, let url = URL(string: value) {
+            if let value = transcript?.coverURL,
+               let url = transcript?.episodeID?.hasPrefix("bilibili:") == true ? BilibiliClient.coverURL(value) : URL(string: value) {
                 AsyncImage(url: url) { image in image.resizable().scaledToFill() } placeholder: { Color.clear }
             }
         }.frame(width: size, height: size).clipShape(RoundedRectangle(cornerRadius: size * 0.2)).accessibilityHidden(true)
@@ -226,3 +227,4 @@ struct SettingsIcon: View {
             .background(color, in: RoundedRectangle(cornerRadius: 8)).accessibilityHidden(true)
     }
 }
+

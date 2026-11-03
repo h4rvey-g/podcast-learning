@@ -16,12 +16,13 @@ public struct BilibiliLink: Sendable {
         guard let url = candidate ?? URL(string: text), url.scheme == "https",
               ["www.bilibili.com", "bilibili.com", "m.bilibili.com", "b23.tv"].contains(url.host?.lowercased() ?? ""),
               url.user == nil, url.password == nil, url.port == nil else { throw ImportError.invalidURL }
-        let parts = url.path.split(separator: "/").map(String.init)
+        var parts = url.path.split(separator: "/").map(String.init)
         if url.host?.lowercased() == "b23.tv" {
             guard parts.count == 1, parts[0].range(of: "^[a-zA-Z0-9]+$", options: .regularExpression) != nil else { throw ImportError.invalidURL }
             self.url = URL(string: "https://b23.tv/\(parts[0])")!; self.id = parts[0]; self.page = 1
             return
         }
+        if parts.count == 3, ["zh-Hans", "zh-Hant", "en"].contains(parts[0]) { parts.removeFirst() }
         guard parts.count == 2, ["audio", "video"].contains(parts[0]) else { throw ImportError.invalidURL }
         let id = parts[1]
         let pattern = parts[0] == "audio" ? "^au[1-9][0-9]*$" : "^(BV[0-9A-Za-z]{10}|av[1-9][0-9]*)$"
@@ -65,6 +66,14 @@ public struct BilibiliClient {
     public static let headers: HTTPHeaders = ["User-Agent": "Mozilla/5.0", "Referer": "https://www.bilibili.com/"]
     private let session: Session
     public init(session: Session = ReliableTransfer.session) { self.session = session }
+    public static func coverURL(_ value: String?) -> URL? {
+        guard let value, var url = URLComponents(string: value.hasPrefix("//") ? "https:" + value : value),
+              let host = url.host, !host.isEmpty, url.user == nil, url.password == nil,
+              ["http", "https"].contains(url.scheme?.lowercased() ?? "") else { return nil }
+        // The documented pic/cover fields can use HTTP; iOS artwork requests need HTTPS.
+        url.scheme = "https"
+        return url.url
+    }
     private func get<T: Decodable & Sendable>(_ url: String, as: T.Type) async throws -> T {
         try await session.request(url, headers: Self.headers).validate(statusCode: 200..<300).serializingDecodable(T.self).value
     }
@@ -93,7 +102,7 @@ public struct BilibiliClient {
             let urls = Self.urls(audio.cdns)
             guard !urls.isEmpty else { throw ImportError.invalidResponse }
             return BilibiliMedia(link: link, title: info.title, author: info.author.isEmpty ? info.uname : info.author,
-                                 cover: info.cover, duration: info.duration, audio: urls, video: [])
+                                 cover: Self.coverURL(info.cover)?.absoluteString, duration: info.duration, audio: urls, video: [])
         }
         let identity = link.id.hasPrefix("BV") ? "bvid=\(link.id)" : "aid=\(link.id.dropFirst(2))"
         let info = try await get("https://api.bilibili.com/x/web-interface/view?\(identity)", as: Envelope<Video>.self).checked()
@@ -117,7 +126,7 @@ public struct BilibiliClient {
             .min(by: { ($0.bandwidth ?? 0) < ($1.bandwidth ?? 0) })?.urls ?? [] : []
         if includeVideo && video.isEmpty { throw ImportError.service("No downloadable video track was found. Turn off Keep Video in Settings to import audio only.") }
         return BilibiliMedia(link: link, title: info.title + (info.pages.count > 1 ? " · \(page.part)" : ""),
-                             author: info.owner.name, cover: info.pic, duration: page.duration, audio: audio.urls, video: video)
+                             author: info.owner.name, cover: Self.coverURL(info.pic)?.absoluteString, duration: page.duration, audio: audio.urls, video: video)
     }
     private static func urls(_ values: [String]) -> [URL] {
         values.compactMap { value in

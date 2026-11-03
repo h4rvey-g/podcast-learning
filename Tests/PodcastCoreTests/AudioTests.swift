@@ -82,3 +82,19 @@ private final class ProgressValues: @unchecked Sendable {
     #expect(range.fraction(at: 100) == 1)
     #expect(range.fraction(at: .nan) == 0)
 }
+
+@Test func libraryMediaRemovalDeletesOnlyThatTranscriptsFilesAndCheckpoints() throws {
+    let id = UUID(), keptID = UUID()
+    defer { try? AudioStore.delete(id); try? AudioStore.delete(keptID) }
+    let files = try [AudioStore.file(id), AudioStore.bilibiliFile(id), AudioStore.videoFile(id),
+                     AudioStore.workDirectory(id).appendingPathComponent("result.json")]
+    let kept = try AudioStore.file(keptID)
+    for file in files + [kept] { try Data("saved".utf8).write(to: file) }
+
+    try AudioStore.delete(id)
+
+    #expect(files.allSatisfy { !FileManager.default.fileExists(atPath: $0.path) })
+    #expect(!FileManager.default.fileExists(atPath: try AudioStore.directory().appendingPathComponent(id.uuidString).path))
+    #expect(try Data(contentsOf: kept) == Data("saved".utf8))
+    try AudioStore.delete(id)
+}

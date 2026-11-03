@@ -26,9 +26,7 @@ struct SettingsView: View {
             } header: { Text("Learning") } footer: { Text("Words at or above this level are marked. Each transcript can override it. Changes apply to new imports; use the reader’s level menu for existing transcripts.") }
             Section {
                 NavigationLink { providerForm } label: { row("Provider", value: settings.baseURL, symbol: "server.rack", color: .indigo) }
-                NavigationLink {
-                    Form { TextField("Model", text: $settings.model).textInputAutocapitalization(.never).autocorrectionDisabled() }.navigationTitle("Model")
-                } label: { row("Model", value: settings.model, symbol: "cpu", color: .indigo) }
+                NavigationLink { ModelSettingsView() } label: { row("Model", value: settings.model, symbol: "cpu", color: .indigo) }
                 Picker(selection: $settings.thinking) {
                     ForEach(ThinkingLevel.allCases, id: \.rawValue) { Text($0.label).tag($0.rawValue) }
                 } label: { Label { Text("Thinking Level") } icon: { SettingsIcon(symbol: "brain", color: .indigo) } }.pickerStyle(.navigationLink)
@@ -118,7 +116,65 @@ struct SettingsView: View {
     }
     @MainActor private func testConnection() async {
         testing = true; testStatus = ""; defer { testing = false }
-        do { try await AIAnalyzer(settings: settings).test(); testStatus = "Connected successfully" }
+        do { try await AIAnalyzer(settings: settings).test(); testStatus = "Connected successfully. Model access checked with provider-default thinking (15-second limit); your selected thinking level is not tested." }
         catch { testStatus = error.localizedDescription }
+    }
+}
+
+private struct ModelSettingsView: View {
+    @Environment(SettingsStore.self) private var settings
+    @State private var models: [String] = []
+    @State private var loading = false
+    @State private var error = ""
+    @State private var customModel = ""
+    @State private var refresh = 0
+    private var customID: String { customModel.trimmingCharacters(in: .whitespacesAndNewlines) }
+    var body: some View {
+        Form {
+            Section("Selected Model") { Text(settings.model).textSelection(.enabled) }
+            Section {
+                TextField("Model ID", text: $customModel)
+                    .textInputAutocapitalization(.never).autocorrectionDisabled()
+                    .accessibilityLabel("Custom Model ID")
+                Button("Add Custom Model") {
+                    let id = customID
+                    if !settings.customModels.contains(id) { settings.customModels.append(id) }
+                    settings.model = id; customModel = ""
+                }.disabled(customID.isEmpty)
+            } header: { Text("Custom Model") } footer: { Text("Enter the exact model ID from your provider, even if it isn't listed below.") }
+            if !settings.customModels.isEmpty {
+                Section("Custom Models") {
+                    ForEach(settings.customModels, id: \.self) { model in modelRow(model) }
+                }
+            }
+            Section {
+                if loading { ProgressView("Loading Models…") }
+                if !error.isEmpty { Text(error).font(.footnote).foregroundStyle(.secondary) }
+                if !loading && error.isEmpty && models.isEmpty { Text("No models returned. You can still add a custom model.").foregroundStyle(.secondary) }
+                ForEach(models, id: \.self) { model in modelRow(model) }
+                Button("Refresh Models", systemImage: "arrow.clockwise") { refresh += 1 }.disabled(loading)
+            } header: { Text("Available Models") } footer: { Text("Loaded automatically from your provider using the saved API key. Listing a model doesn't guarantee it supports the selected API or thinking level.") }
+        }.navigationTitle("Model")
+            .task(id: "\(settings.aiAPI)|\(settings.baseURL)|\(refresh)") { await loadModels() }
+    }
+    private func modelRow(_ model: String) -> some View {
+        Button { settings.model = model } label: {
+            HStack {
+                Text(model).foregroundStyle(.primary)
+                Spacer()
+                if settings.model == model { Image(systemName: "checkmark").accessibilityHidden(true) }
+            }
+        }.accessibilityAddTraits(settings.model == model ? .isSelected : [])
+    }
+    @MainActor private func loadModels() async {
+        loading = true; error = ""; models = []; defer { loading = false }
+        do {
+            let available = try await AIAnalyzer(settings: settings).availableModels()
+            try Task.checkCancellation()
+            models = available
+        } catch is CancellationError {
+        } catch {
+            if !Task.isCancelled { self.error = error.localizedDescription }
+        }
     }
 }

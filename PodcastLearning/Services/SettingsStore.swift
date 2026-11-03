@@ -8,6 +8,7 @@ import PodcastCore
     var targetLevel: String { didSet { defaults.set(targetLevel, forKey: "targetLevel") } }
     var baseURL: String { didSet { defaults.set(baseURL, forKey: "aiBaseURL") } }
     var model: String { didSet { defaults.set(model, forKey: "aiModel") } }
+    var customModels: [String] { didSet { defaults.set(customModels, forKey: "aiCustomModels") } }
     var aiAPI: String { didSet { defaults.set(aiAPI, forKey: "aiAPI") } }
     var thinking: String { didSet { defaults.set(thinking, forKey: "thinking") } }
     var speechModel: String { didSet { defaults.set(speechModel, forKey: "speechModel") } }
@@ -24,11 +25,12 @@ import PodcastCore
         targetLevel = defaults.string(forKey: "targetLevel") ?? "B2"
         baseURL = defaults.string(forKey: "aiBaseURL") ?? "https://\(defaults.string(forKey: "aiHost") ?? "api.openai.com")\(defaults.string(forKey: "aiBasePath") ?? "/v1")"
         model = defaults.string(forKey: "aiModel") ?? "gpt-4.1"
+        customModels = defaults.stringArray(forKey: "aiCustomModels") ?? []
         aiAPI = defaults.string(forKey: "aiAPI") ?? "chat"
         thinking = defaults.string(forKey: "thinking") ?? "provider-default"
         speechModel = defaults.string(forKey: "speechModel") ?? "MAI-Transcribe-2"
         voice = defaults.string(forKey: "voice") ?? "en-US"
-        rate = defaults.object(forKey: "rate") as? Double ?? 0.45
+        rate = defaults.object(forKey: "rate") as? Double ?? Double(AVSpeechUtteranceDefaultSpeechRate)
         aiConsent = defaults.bool(forKey: "aiConsent")
         speechEndpoint = defaults.string(forKey: "speechEndpoint") ?? ""
         transcriptionConsent = defaults.bool(forKey: "transcriptionConsent")
