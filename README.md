@@ -84,6 +84,17 @@ python3 scripts/generate_project.py
 
 The project generator owns `project.pbxproj` and the shared scheme. It preserves `Config.xcconfig`, source files, plists, and entitlements; reapply any target-setting edits after regeneration. Package revisions are pinned in the project and `Package.resolved`.
 
+### Releases
+
+`.github/workflows/release.yml` publishes an IPA. Bump `CFBundleShortVersionString` in `PodcastLearning/Info.plist` (and `ShareExtension/Info.plist`), commit, then tag that exact version:
+
+```sh
+swift test
+git tag v1.0 && git push origin v1.0
+```
+
+The tag must equal `v<CFBundleShortVersionString>` or the job fails before building. The IPA is **unsigned** — SideStore and LiveContainer re-sign it on the phone with your own account, so no certificates are stored in GitHub. The share extension is included; use `build/PodcastLearning-SideStore.ipa` only when installing through SideStore. Manual runs (`gh workflow run release.yml`) build from the current commit and republish the same tag.
+
 Tests cover answer normalization, hint/attempt states, Leitner transitions and queues, SwiftData persistence/cascade deletion, duplicate memories, subtitle parsing, CEFR lookup/lemmatization, names and thresholds, PodText/iTunes/RSS fixtures, HTTP failures, shared payloads, and AI response/schema validation. Bilibili/STT tests cover canonical/shared links, WBI signatures, audio-only versus video resolution, paid-preview rejection, backup CDNs, interrupted uploads and response bodies, throttling, retry exhaustion, authentication failures, disk-backed multipart contents, cached-result reuse, timestamp validation, real WAV conversion, and MP4 audio/video muxing. Normal test runs do not make live API calls; the opt-in suite below does.
 
 ### Opt-in live provider tests

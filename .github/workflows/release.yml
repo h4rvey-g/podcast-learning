@@ -1,0 +1,84 @@
+name: Release IPA
+
+# Tag a version bump to publish a release: git tag v1.1 && git push origin v1.1
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  ipa:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select newest Xcode
+        run: |
+          set -euo pipefail
+          DEVELOPER_DIR=$(ls -d /Applications/Xcode*.app | sort -V | tail -1)
+          echo "DEVELOPER_DIR=$DEVELOPER_DIR" >> "$GITHUB_ENV"
+          "$DEVELOPER_DIR/Contents/Developer/usr/bin/xcodebuild" -version
+
+      - name: Read version and verify tag
+        run: |
+          set -euo pipefail
+          VERSION=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' PodcastLearning/Info.plist)
+          BUILD=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' PodcastLearning/Info.plist)
+          TAG="v$VERSION"
+          SHARE_VERSION=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' ShareExtension/Info.plist)
+          if [ "$SHARE_VERSION" != "$VERSION" ]; then
+            echo "::error::ShareExtension is $SHARE_VERSION; keep both Info.plists on $VERSION"
+            exit 1
+          fi
+          if [ "$GITHUB_REF_TYPE" = tag ] && [ "$GITHUB_REF_NAME" != "$TAG" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match Info.plist version $VERSION (expected $TAG)"
+            exit 1
+          fi
+          echo "TAG=$TAG" >> "$GITHUB_ENV"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "BUILD=$BUILD" >> "$GITHUB_ENV"
+
+      - uses: actions/cache@v4
+        with:
+          path: SourcePackages
+          key: spm-${{ runner.os }}-${{ hashFiles('Package.resolved') }}
+
+      # Unsigned on purpose: SideStore/LiveContainer re-sign on the phone with your own account.
+      - name: Build app and share extension
+        run: |
+          set -euo pipefail
+          xcodebuild -project PodcastLearning.xcodeproj -scheme PodcastLearning \
+            -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' \
+            -derivedDataPath DerivedData -clonedSourcePackagesDirPath SourcePackages \
+            -quiet \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            build
+
+      - name: Package IPA
+        run: |
+          set -euo pipefail
+          mkdir -p build/Payload
+          ditto DerivedData/Build/Products/Release-iphoneos/PodcastLearning.app \
+            build/Payload/PodcastLearning.app
+          test -d build/Payload/PodcastLearning.app/PlugIns/ShareExtension.appex
+          ditto -c -k --norsrc --noextattr --noqtn --keepParent \
+            build/Payload "build/PodLearn-${VERSION}-unsigned.ipa"
+          ls -lh build/*.ipa
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          IPA="build/PodLearn-${VERSION}-unsigned.ipa"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$IPA" --clobber
+          else
+            gh release create "$TAG" "$IPA" \
+              --target "$GITHUB_SHA" \
+              --title "PodLearn $VERSION" \
+              --notes "Unsigned PodLearn $VERSION (build $BUILD). Install with SideStore or LiveContainer; either re-signs the IPA with your own Apple ID. Share extension included."
+          fi
