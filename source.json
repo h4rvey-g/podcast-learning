@@ -1,0 +1,40 @@
+{
+  "name": "PodLearn",
+  "identifier": "com.howieguo8.PodcastLearning.source",
+  "subtitle": "Podcast learning for English",
+  "description": "Learn English from podcasts and transcripts you import. Your library, dictionary, dictation, and spaced review all run on device. Optional AI analysis and audio transcription use your own API key. These builds are unsigned: SideStore re-signs them with your Apple ID.",
+  "iconURL": "https://raw.githubusercontent.com/h4rvey-g/podcast-learning/main/PodcastLearning/Assets.xcassets/AppIcon.appiconset/AppIcon.png",
+  "headerURL": "https://raw.githubusercontent.com/h4rvey-g/podcast-learning/main/PodcastLearning/Assets.xcassets/AppIcon.appiconset/AppIcon.png",
+  "tintColor": "#6D4AFF",
+  "featuredApps": [
+    "com.howieguo8.PodcastLearning"
+  ],
+  "apps": [
+    {
+      "name": "PodLearn",
+      "bundleIdentifier": "com.howieguo8.PodcastLearning",
+      "developerName": "h4rvey-g",
+      "subtitle": "English practice from podcasts",
+      "localizedDescription": "Learn English from podcasts and transcripts you import. Your library, dictionary, dictation, and spaced review all run on device. Optional AI analysis and audio transcription use your own API key. These builds are unsigned: SideStore re-signs them with your Apple ID.",
+      "iconURL": "https://raw.githubusercontent.com/h4rvey-g/podcast-learning/main/PodcastLearning/Assets.xcassets/AppIcon.appiconset/AppIcon.png",
+      "tintColor": "#6D4AFF",
+      "category": "Education",
+      "versions": [
+        {
+          "version": "1.1",
+          "date": "2026-11-04T01:17:17Z",
+          "localizedDescription": "PodLearn 1.1. Unsigned build; SideStore re-signs it with your Apple ID.",
+          "downloadURL": "https://github.com/h4rvey-g/podcast-learning/releases/download/v1.1/PodLearn-1.1-unsigned.ipa",
+          "size": 10313577,
+          "minOSVersion": "18.0"
+        }
+      ],
+      "version": "1.1",
+      "versionDate": "2026-11-04T01:17:17Z",
+      "downloadURL": "https://github.com/h4rvey-g/podcast-learning/releases/download/v1.1/PodLearn-1.1-unsigned.ipa",
+      "size": 10313577,
+      "minOSVersion": "18.0"
+    }
+  ],
+  "news": []
+}
