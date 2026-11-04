@@ -126,7 +126,7 @@ Add this URL to SideStore (**Sources → +**) to install PodLearn and receive in
 https://raw.githubusercontent.com/h4rvey-g/podcast-learning/main/source.json
 ```
 
-`source.json` is committed at the repository root and regenerated after every release by `scripts/build_source.py` (run locally with `GH_TOKEN=… python3 scripts/build_source.py`). It lists every published `PodLearn-*-unsigned.ipa` with its version, size, and download URL, newest first.
+`source.json` is committed at the repository root and regenerated after every release by `scripts/build_source.py` (run locally with `GH_TOKEN=… python3 scripts/build_source.py`). It lists every published `PodLearn-*-unsigned.ipa` with its version, size, and download URL, newest first. IPA download URLs use the `https://wget.la/` prefix before the original GitHub release URL; source and icon URLs stay unchanged.
 
 The source advertises `APP_BUNDLE_ID` from `Config.xcconfig`. SideStore matches updates by that identifier: changing it makes the released app a *different* app, so an existing install is not updated. Keep the ID stable, or update SideStore by hand and let it replace the app of the same ID (which preserves its data).
 
