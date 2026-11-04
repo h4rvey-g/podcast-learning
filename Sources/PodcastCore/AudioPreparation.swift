@@ -80,6 +80,30 @@ public enum AudioPreparation {
         }
         return chunks
     }
+    public static func joinAudio(_ files: [URL], to destination: URL) async throws -> [PlaybackRange] {
+        guard !files.isEmpty else { throw ImportError.emptyText }
+        let composition = AVMutableComposition()
+        guard let track = composition.addMutableTrack(withMediaType: .audio, preferredTrackID: kCMPersistentTrackID_Invalid) else { throw ImportError.invalidResponse }
+        var cursor = CMTime.zero, ranges: [PlaybackRange] = []
+        for file in files {
+            try Task.checkCancellation()
+            let asset = AVURLAsset(url: file)
+            guard let source = try await asset.loadTracks(withMediaType: .audio).first else { throw ImportError.invalidResponse }
+            let duration = try await asset.load(.duration)
+            guard let range = PlaybackRange(start: cursor.seconds, end: (cursor + duration).seconds) else { throw ImportError.invalidResponse }
+            try track.insertTimeRange(CMTimeRange(start: .zero, duration: duration), of: source, at: cursor)
+            ranges.append(range); cursor = cursor + duration
+        }
+        guard let export = AVAssetExportSession(asset: composition, presetName: AVAssetExportPresetAppleM4A) else { throw ImportError.invalidResponse }
+        let temporary = destination.deletingLastPathComponent().appendingPathComponent(UUID().uuidString + ".m4a")
+        defer { try? FileManager.default.removeItem(at: temporary) }
+        export.outputURL = temporary; export.outputFileType = .m4a
+        await export.export()
+        try Task.checkCancellation()
+        guard export.status == .completed else { throw export.error ?? ImportError.invalidResponse }
+        try ReliableTransfer.commit(temporary, to: destination)
+        return ranges
+    }
     public static func video(audio: URL, track: URL, to destination: URL) async throws {
         let composition = AVMutableComposition()
         let audioAsset = AVURLAsset(url: audio), videoAsset = AVURLAsset(url: track)

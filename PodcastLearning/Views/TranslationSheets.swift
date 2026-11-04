@@ -3,6 +3,7 @@ import Translation
 import PodcastCore
 
 struct WordSheet: View {
+    @Environment(\.accentTheme) private var theme
     let word: String
     let sentence: Sentence
     let transcript: Transcript
@@ -57,7 +58,7 @@ struct WordSheet: View {
                 } label: {
                     Label(item?.isRemoved == false ? "Remove" : "Add to Dictation", systemImage: item?.isRemoved == false ? "xmark" : "plus")
                         .frame(maxWidth: .infinity).padding(.vertical, 15).background(Color(uiColor: .tertiarySystemFill), in: Capsule())
-                }.foregroundStyle(item?.isRemoved == false ? .red : Palette.accent)
+                }.foregroundStyle(item?.isRemoved == false ? .red : theme.color)
                 Button { if let item { showInItems(item); dismiss() } } label: {
                     Label("Show in Items", systemImage: "list.bullet").frame(maxWidth: .infinity).padding(.vertical, 15).background(Color(uiColor: .tertiarySystemFill), in: Capsule())
                 }.foregroundStyle(.primary).disabled(item == nil)

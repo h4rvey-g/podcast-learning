@@ -8,6 +8,7 @@ private enum ReaderSelection: Identifiable {
 }
 
 struct ReaderView: View {
+    @Environment(\.accentTheme) private var theme
     @Bindable var transcript: Transcript
     @Environment(AppStore.self) private var store
     @Environment(SettingsStore.self) private var settings
@@ -17,6 +18,7 @@ struct ReaderView: View {
     @State private var highlightedItemID: UUID?
     @State private var practice = false
     @State private var showVideo = false
+    @State private var confirmSynthesis = false
     @State private var includeMastered = false
     @State private var dictationSession: DictationSession?
     var body: some View {
@@ -41,6 +43,7 @@ struct ReaderView: View {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 24) {
                         transcriptionStatus
+                        synthesisStatus
                         analysisStatus
                         ForEach(transcript.orderedSegments) { segment in
                             VStack(alignment: .leading, spacing: 10) {
@@ -50,8 +53,8 @@ struct ReaderView: View {
                                     HStack(spacing: 8) {
                                         Image(systemName: player.isActive(segment, in: transcript) ? "pause.fill" : "play.fill")
                                             .font(.caption).frame(width: 28, height: 28)
-                                            .foregroundStyle(player.isActive(segment, in: transcript) ? Palette.onAccent : Palette.accent)
-                                            .background(player.isActive(segment, in: transcript) ? Palette.accent : Palette.accent.opacity(0.08), in: Circle())
+                                            .foregroundStyle(player.isActive(segment, in: transcript) ? Palette.onAccent : theme.color)
+                                            .background(player.isActive(segment, in: transcript) ? theme.color : theme.color.opacity(0.08), in: Circle())
                                         Text(segment.speaker ?? "Paragraph \(segment.index + 1)")
                                         if let start = segment.start { Text(timestamp(start)).monospacedDigit() }
                                     }.font(.footnote).foregroundStyle(.secondary).frame(minHeight: 36)
@@ -88,6 +91,12 @@ struct ReaderView: View {
                     if let file = try? AudioStore.videoFile(transcript.id), FileManager.default.fileExists(atPath: file.path) {
                         Button("Play Downloaded Video", systemImage: "video") { player.stop(); showVideo = true }
                     }
+                    if transcript.sourceURL == nil && transcript.remoteAudioURL == nil && !transcript.orderedSegments.isEmpty {
+                        if AudioStore.localURL(transcript.id) == nil {
+                            Button("Generate Audio", systemImage: "waveform") { confirmSynthesis = true }.disabled(store.synthesizing.contains(transcript.id))
+                        }
+                        NavigationLink("Generated Audio Settings") { SynthesisSettingsView() }
+                    }
                     Button("Analyze with AI", systemImage: "sparkles") { Task { await store.analyze(transcript) } }.disabled(transcript.analysisState == "pending" || transcript.orderedSegments.isEmpty)
                     if (transcript.remoteAudioURL != nil || transcript.sourceURL != nil) && AudioStore.localURL(transcript.id) == nil {
                         Button(store.audioErrors[transcript.id] == nil ? "Download Audio" : "Retry Audio Download", systemImage: "arrow.down.circle") { Task { await store.downloadAudio(transcript) } }.disabled(store.downloading.contains(transcript.id) || store.transcribing.contains(transcript.id))
@@ -112,6 +121,13 @@ struct ReaderView: View {
         .sheet(isPresented: $showVideo) {
             if let file = try? AudioStore.videoFile(transcript.id) { DownloadedVideoView(url: file) }
         }
+        .confirmationDialog("Generate AI Audio?", isPresented: $confirmSynthesis, titleVisibility: .visible) {
+            Button("Generate Audio") { player.stop(); store.synthesize(transcript) }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Send \(transcript.spokenText.count.formatted()) characters to OpenRouter using \(settings.ttsModel) · \(settings.ttsVoice). Charges may apply. Keep PodLearn open. Completed parts are reused on retry; a lost response may be billed again.")
+        }
+        .onChange(of: transcript.synthesisState) { _, state in if state == "done" { player.stop() } }
         .fullScreenCover(isPresented: $practice, onDismiss: loadDictationSession) { DictationView(transcript: transcript, includeMastered: includeMastered) }
         .task { loadDictationSession() }
         .onDisappear { player.stop(); store.save() }
@@ -139,6 +155,39 @@ struct ReaderView: View {
                     .frame(minHeight: 44)
                 NavigationLink("Audio Transcription Settings") { TranscriptionSettingsView() }.frame(minHeight: 44)
             }
+        }
+    }
+    @ViewBuilder private var synthesisStatus: some View {
+        if transcript.synthesisState == "preparing" {
+            VStack(alignment: .leading, spacing: 8) {
+                Text(store.synthesisStatus[transcript.id] ?? "Preparing document…").font(.headline)
+                ProgressView(value: store.synthesisProgress[transcript.id]).accessibilityLabel("Document Processing")
+                Text("Your session is saved. Text extraction, AI cleanup, and audio generation run automatically. Keep PodLearn open.").font(.footnote).foregroundStyle(.secondary)
+            }
+        } else if transcript.synthesisState == "preparationFailed" {
+            VStack(alignment: .leading, spacing: 8) {
+                Label("Document Processing Interrupted", systemImage: "exclamationmark.arrow.circlepath").font(.headline)
+                Text(transcript.synthesisError ?? "The original document is kept for retry.").font(.footnote).foregroundStyle(.secondary)
+                Text("Retry sends text to your configured providers and may incur charges.").font(.footnote).foregroundStyle(.secondary)
+                Button("Retry Document Processing", systemImage: "arrow.clockwise") { store.synthesize(transcript) }.frame(minHeight: 44)
+                NavigationLink("AI Settings") { SettingsView() }.frame(minHeight: 44)
+                NavigationLink("Generated Audio Settings") { SynthesisSettingsView() }.frame(minHeight: 44)
+            }
+        } else if transcript.synthesisState == "pending" {
+            VStack(alignment: .leading, spacing: 8) {
+                Text(store.synthesisProgress[transcript.id] == 1 ? "Combining audio…" : "Generating AI audio…").font(.headline)
+                ProgressView(value: store.synthesisProgress[transcript.id]).accessibilityLabel("Audio Generation")
+                Text("Keep PodLearn open. You can read and practice with the offline voice while waiting. Completed parts are kept for retry.").font(.footnote).foregroundStyle(.secondary)
+            }
+        } else if transcript.synthesisState == "failed" {
+            VStack(alignment: .leading, spacing: 8) {
+                Label("Audio Generation Interrupted", systemImage: "exclamationmark.arrow.circlepath").font(.headline)
+                Text(transcript.synthesisError ?? "Completed parts are kept.").font(.footnote).foregroundStyle(.secondary)
+                Button("Retry Audio Generation", systemImage: "arrow.clockwise") { confirmSynthesis = true }.frame(minHeight: 44)
+                NavigationLink("Generated Audio Settings") { SynthesisSettingsView() }.frame(minHeight: 44)
+            }
+        } else if transcript.synthesisState == "done", AudioStore.localURL(transcript.id) != nil {
+            Label("AI-generated audio · Saved for offline playback", systemImage: "waveform").font(.footnote).foregroundStyle(.secondary)
         }
     }
     @ViewBuilder private var analysisStatus: some View {
@@ -177,6 +226,7 @@ struct PlaybackBar: View {
 }
 
 private struct AudioDownloadStatus: View {
+    @Environment(\.accentTheme) private var theme
     let transcript: Transcript
     @Environment(AppStore.self) private var store
     var body: some View {
@@ -188,7 +238,7 @@ private struct AudioDownloadStatus: View {
                         Spacer()
                         if let fraction = store.downloadProgress[transcript.id] { Text(fraction, format: .percent.precision(.fractionLength(0))).monospacedDigit() }
                     }.font(.footnote)
-                    ProgressView(value: store.downloadProgress[transcript.id]).tint(Palette.accent).accessibilityLabel("Audio Download")
+                    ProgressView(value: store.downloadProgress[transcript.id]).tint(theme.color).accessibilityLabel("Audio Download")
                     Text("Keep reading or practice with text to speech.").font(.caption).foregroundStyle(.secondary)
                 }.downloadCard()
             } else if let error = store.audioErrors[transcript.id] {

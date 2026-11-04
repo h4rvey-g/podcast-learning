@@ -449,3 +449,61 @@ private actor ModelCatalogStub {
     await #expect(throws: ImportError.self) { try await client.completion(system: "Reply OK", input: "Test") }
     #expect(await stub.snapshot().count == 1)
 }
+
+@Test func documentCleanupUsesOneWholeDocumentCallWithSchemaForEveryProvider() async throws {
+    let input = String(repeating: "Extracted text with line breaks.\n", count: 300)
+    for (api, model) in [(AIProviderAPI.chat, "gpt-4.1"), (.responses, "gpt-4.1")] + nativeProviders {
+        let stub = ProviderStub(text: #"{"pieces":["First clean piece.","Second clean piece."]}"#)
+        let client = try AIClient(baseURL: "https://provider.example/v1", model: model, key: "test-key", api: api, fetch: { try await stub.fetch($0) })
+        #expect(try await client.cleanText(input) == ["First clean piece.", "Second clean piece."])
+        let requests = await stub.snapshot()
+        #expect(requests.count == 1)
+        let body = try #require(JSONSerialization.jsonObject(with: requests[0].httpBody!) as? [String: Any])
+        let schema: [String: Any]?
+        switch api {
+        case .chat:
+            let messages = try #require(body["messages"] as? [[String: Any]])
+            #expect(messages.last?["content"] as? String == input)
+            let format = body["response_format"] as? [String: Any]
+            #expect(format?["type"] as? String == "json_schema")
+            schema = (format?["json_schema"] as? [String: Any])?["schema"] as? [String: Any]
+        case .responses:
+            schema = ((body["text"] as? [String: Any])?["format"] as? [String: Any])?["schema"] as? [String: Any]
+        case .anthropic:
+            schema = ((body["output_config"] as? [String: Any])?["format"] as? [String: Any])?["schema"] as? [String: Any]
+        case .gemini:
+            schema = (body["generationConfig"] as? [String: Any])?["responseJsonSchema"] as? [String: Any]
+        }
+        let root = try #require(schema)
+        #expect(root["additionalProperties"] as? Bool == false)
+        #expect(root["required"] as? [String] == ["pieces"])
+        let pieces = (root["properties"] as? [String: Any])?["pieces"] as? [String: Any]
+        #expect(pieces?["type"] as? String == "array")
+        #expect((pieces?["items"] as? [String: Any])?["type"] as? String == "string")
+        if api == .chat || api == .responses {
+            #expect(pieces?["minItems"] as? Int == 1)
+            #expect((pieces?["items"] as? [String: Any])?["maxLength"] as? Int == 4000)
+        }
+    }
+}
+
+@Test func documentCleanupRejectsInvalidPiecesTruncationAndSchemaFallback() async throws {
+    let oversized = String(repeating: "x", count: 4001)
+    for output in [#"{"pieces":[]}"#, #"{"pieces":[" "]}"#, #"{"pieces":[1]}"#,
+                   #"{"pieces":["text"],"extra":true}"#, "not JSON", "{\"pieces\":[\"\(oversized)\"]}"] {
+        let stub = ProviderStub(text: output)
+        let client = try AIClient(baseURL: "https://provider.example/v1", model: "test", key: "key", fetch: { try await stub.fetch($0) })
+        await #expect(throws: (any Error).self) { try await client.cleanText("Original document.") }
+        #expect(await stub.snapshot().count == 1)
+    }
+    for (status, finish) in [(400, "stop"), (200, "length")] {
+        let stub = ProviderStub(failure: status == 400 ? 400 : nil, finish: finish, text: #"{"pieces":["partial"]}"#)
+        let client = try AIClient(baseURL: "https://provider.example/v1", model: "test", key: "key", fetch: { try await stub.fetch($0) })
+        await #expect(throws: ImportError.self) { try await client.cleanText("Original document.") }
+        #expect(await stub.snapshot().count == 1)
+    }
+    let stub = ProviderStub()
+    let client = try AIClient(baseURL: "https://provider.example/v1", model: "test", key: "key", fetch: { try await stub.fetch($0) })
+    await #expect(throws: ImportError.self) { try await client.cleanText(" \n ") }
+    #expect(await stub.snapshot().isEmpty)
+}

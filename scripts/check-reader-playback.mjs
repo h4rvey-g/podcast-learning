@@ -28,6 +28,8 @@ import Observation
 
 @MainActor enum Counters { static var highlights = 0; static var itemScans = 0 }
 nonisolated final class Flag: @unchecked Sendable { var value = 0 }
+struct AccentTheme { var color = Color.purple }
+extension EnvironmentValues { @Entry var accentTheme = AccentTheme() }
 enum Palette {
     static let accent = Color.purple, onAccent = Color.white, cell = Color.white
     static let key = Color.yellow, list = Color.blue, ai = Color.orange, manual = Color.teal
@@ -88,8 +90,10 @@ struct ReaderScrollProbe: View {
     let transcript: Transcript
     @Environment(ClipPlayer.self) private var player
     @Environment(SettingsStore.self) private var settings
+    @Environment(\\.accentTheme) private var theme
     @State private var selection: ReaderSelection?
     var transcriptionStatus: some View { EmptyView() }
+    var synthesisStatus: some View { EmptyView() }
     var analysisStatus: some View { EmptyView() }
     var body: some View {
 ${reader.slice(start, end)}

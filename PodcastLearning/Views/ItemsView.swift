@@ -3,6 +3,7 @@ import SwiftData
 import PodcastCore
 
 struct ItemsView: View {
+    @Environment(\.accentTheme) private var theme
     let transcript: Transcript
     var focusedItemID: UUID? = nil
     let select: (DictationItem) -> Void
@@ -56,13 +57,13 @@ struct ItemsView: View {
             Button { select(item) } label: { ItemSummaryRow(item: item, memory: memories.first { $0.key == item.key }) }.buttonStyle(.plain)
             if item.isRemoved {
                 Button("Restore") { item.isRemoved = false; store.save() }.font(.footnote.weight(.semibold))
-                    .padding(.horizontal, 12).frame(minHeight: 36).background(Palette.accent.opacity(0.08), in: Capsule()).buttonStyle(.borderless)
+                    .padding(.horizontal, 12).frame(minHeight: 36).background(theme.color.opacity(0.08), in: Capsule()).buttonStyle(.borderless)
             }
         }.opacity(item.isRemoved ? 0.65 : 1)
-            .listRowBackground(focusedItemID == item.id ? Palette.accent.opacity(0.08) : Palette.cell)
+            .listRowBackground(focusedItemID == item.id ? theme.color.opacity(0.08) : Palette.cell)
             .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                 Button(item.isRemoved ? "Restore" : "Remove", systemImage: item.isRemoved ? "arrow.uturn.backward" : "minus.circle") { item.isRemoved.toggle(); store.save() }
-                    .tint(item.isRemoved ? Palette.accent : .red)
+                    .tint(item.isRemoved ? theme.color : .red)
             }
             .contextMenu {
                 Menu("Change Example Sentence") {

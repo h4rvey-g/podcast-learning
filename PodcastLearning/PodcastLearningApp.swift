@@ -25,7 +25,8 @@ import PodcastCore
     var body: some Scene {
         WindowGroup {
             if let container, let store {
-                LibraryView().modelContainer(container).environment(store).environment(settings).environment(player).tint(Palette.accent)
+                LibraryView().modelContainer(container).environment(store).environment(settings).environment(player)
+                    .environment(\.accentTheme, settings.accentTheme).tint(settings.accentTheme.color)
             } else {
                 ContentUnavailableView("Library Could Not Open", systemImage: "externaldrive.badge.exclamationmark",
                     description: Text("Your data has not been erased. Check signing and iCloud configuration, then reopen the app.\n\n\(startupError ?? "Unknown error")"))

@@ -4,7 +4,6 @@ import NaturalLanguage
 
 // Semantic light/dark pairs sampled from the Figma document.
 enum Palette {
-    static let accent = Color("AccentColor")
     static let onAccent = Color("OnAccent")
     static let key = Color("KeySentence")
     static let list = Color("ListSource")
@@ -16,6 +15,7 @@ enum Palette {
 }
 
 struct PrimaryButton: View {
+    @Environment(\.accentTheme) private var theme
     let title: String
     var symbol: String? = nil
     let action: () -> Void
@@ -24,7 +24,7 @@ struct PrimaryButton: View {
             HStack { if let symbol { Image(systemName: symbol) }; Text(title) }
                 .font(.headline).frame(maxWidth: .infinity).padding(.vertical, 15)
                 .contentShape(Capsule())
-        }.buttonStyle(.plain).foregroundStyle(Palette.onAccent).background(Palette.accent, in: Capsule())
+        }.buttonStyle(.plain).foregroundStyle(Palette.onAccent).background(theme.color, in: Capsule())
     }
 }
 
@@ -83,6 +83,7 @@ func timestamp(_ seconds: Double) -> String {
 }
 
 struct Waveform: View {
+    @Environment(\.accentTheme) private var theme
     var progress: Double
     var seek: ((Double) -> Void)? = nil
     @GestureState private var scrubbing: Double?
@@ -92,10 +93,10 @@ struct Waveform: View {
         GeometryReader { geometry in
             ZStack(alignment: .leading) {
                 bars(width: geometry.size.width, color: Color.secondary.opacity(0.35))
-                bars(width: geometry.size.width, color: Palette.accent)
+                bars(width: geometry.size.width, color: theme.color)
                     .mask(alignment: .leading) { Rectangle().frame(width: geometry.size.width * displayed) }
                 if seek != nil {
-                    Capsule().fill(Palette.accent).frame(width: 2, height: 32)
+                    Capsule().fill(theme.color).frame(width: 2, height: 32)
                         .offset(x: max(0, min(geometry.size.width - 2, geometry.size.width * displayed)))
                 }
             }.frame(height: 44).contentShape(Rectangle())
@@ -231,6 +232,7 @@ struct SettingsIcon: View {
 
 /// Renders an AI answer's markdown (headings, bullets, numbered steps, inline bold/code) as SwiftUI text.
 struct MarkdownText: View {
+    @Environment(\.accentTheme) private var theme
     let text: String
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -239,9 +241,9 @@ struct MarkdownText: View {
                 case .heading(let level, let text):
                     Text(inline(text)).font(level <= 2 ? .headline : .subheadline.weight(.semibold)).padding(.top, 2)
                 case .bullet(let text):
-                    HStack(alignment: .firstTextBaseline, spacing: 8) { Text("•").foregroundStyle(Palette.accent); Text(inline(text)) }
+                    HStack(alignment: .firstTextBaseline, spacing: 8) { Text("•").foregroundStyle(theme.color); Text(inline(text)) }
                 case .numbered(let marker, let text):
-                    HStack(alignment: .firstTextBaseline, spacing: 8) { Text(marker).foregroundStyle(Palette.accent).monospacedDigit(); Text(inline(text)) }
+                    HStack(alignment: .firstTextBaseline, spacing: 8) { Text(marker).foregroundStyle(theme.color).monospacedDigit(); Text(inline(text)) }
                 case .paragraph(let text):
                     Text(inline(text))
                 }

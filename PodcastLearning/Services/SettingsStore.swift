@@ -5,6 +5,7 @@ import AVFoundation
 import PodcastCore
 
 @Observable final class SettingsStore {
+    var accentTheme: AccentTheme { didSet { defaults.set(accentTheme.rawValue, forKey: "accentTheme") } }
     var targetLevel: String { didSet { defaults.set(targetLevel, forKey: "targetLevel") } }
     var baseURL: String { didSet { defaults.set(baseURL, forKey: "aiBaseURL") } }
     var model: String { didSet { defaults.set(model, forKey: "aiModel") } }
@@ -12,6 +13,8 @@ import PodcastCore
     var aiAPI: String { didSet { defaults.set(aiAPI, forKey: "aiAPI") } }
     var thinking: String { didSet { defaults.set(thinking, forKey: "thinking") } }
     var speechModel: String { didSet { defaults.set(speechModel, forKey: "speechModel") } }
+    var ttsModel: String { didSet { defaults.set(ttsModel, forKey: "ttsModel") } }
+    var ttsVoice: String { didSet { defaults.set(ttsVoice, forKey: "ttsVoice") } }
     var voice: String { didSet { defaults.set(voice, forKey: "voice") } }
     var rate: Double { didSet { defaults.set(rate, forKey: "rate") } }
     var aiConsent: Bool { didSet { defaults.set(aiConsent, forKey: "aiConsent") } }
@@ -22,6 +25,7 @@ import PodcastCore
     private let defaults: UserDefaults
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
+        accentTheme = AccentTheme(rawValue: defaults.string(forKey: "accentTheme") ?? "") ?? .purple
         targetLevel = defaults.string(forKey: "targetLevel") ?? "B2"
         baseURL = defaults.string(forKey: "aiBaseURL") ?? "https://\(defaults.string(forKey: "aiHost") ?? "api.openai.com")\(defaults.string(forKey: "aiBasePath") ?? "/v1")"
         model = defaults.string(forKey: "aiModel") ?? "gpt-4.1"
@@ -29,6 +33,8 @@ import PodcastCore
         aiAPI = defaults.string(forKey: "aiAPI") ?? "chat"
         thinking = defaults.string(forKey: "thinking") ?? "provider-default"
         speechModel = defaults.string(forKey: "speechModel") ?? "MAI-Transcribe-2"
+        ttsModel = defaults.string(forKey: "ttsModel") ?? SpeechSynthesizer.defaultModel
+        ttsVoice = defaults.string(forKey: "ttsVoice") ?? SpeechSynthesizer.defaultVoice
         voice = defaults.string(forKey: "voice") ?? "en-US"
         rate = defaults.object(forKey: "rate") as? Double ?? Double(AVSpeechUtteranceDefaultSpeechRate)
         aiConsent = defaults.bool(forKey: "aiConsent")

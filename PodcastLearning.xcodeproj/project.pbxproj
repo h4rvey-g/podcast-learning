@@ -280,6 +280,17 @@
 				<string>CF415B96E85F94253E685563</string>
 			</array>
 		</dict>
+		<key>FF12E8A2E4A5CEF6669A69E9</key>
+		<dict>
+			<key>isa</key>
+			<string>PBXFileReference</string>
+			<key>lastKnownFileType</key>
+			<string>sourcecode.swift</string>
+			<key>path</key>
+			<string>PodcastLearning/AccentTheme.swift</string>
+			<key>sourceTree</key>
+			<string>&lt;group&gt;</string>
+		</dict>
 		<key>B4F713F917B60C279BAF6455</key>
 		<dict>
 			<key>isa</key>
@@ -434,6 +445,17 @@
 			<key>sourceTree</key>
 			<string>&lt;group&gt;</string>
 		</dict>
+		<key>A148BBDE5D66C948EF15F721</key>
+		<dict>
+			<key>isa</key>
+			<string>PBXFileReference</string>
+			<key>lastKnownFileType</key>
+			<string>sourcecode.swift</string>
+			<key>path</key>
+			<string>PodcastLearning/Views/SynthesisSettingsView.swift</string>
+			<key>sourceTree</key>
+			<string>&lt;group&gt;</string>
+		</dict>
 		<key>C97D4044E1AC0D1395533A1D</key>
 		<dict>
 			<key>isa</key>
@@ -477,6 +499,13 @@
 			<string>PodcastLearning/PodcastLearning.entitlements</string>
 			<key>sourceTree</key>
 			<string>&lt;group&gt;</string>
+		</dict>
+		<key>3F31B234A2E281D45B67B264</key>
+		<dict>
+			<key>isa</key>
+			<string>PBXBuildFile</string>
+			<key>fileRef</key>
+			<string>FF12E8A2E4A5CEF6669A69E9</string>
 		</dict>
 		<key>9F789B841F10F8C1F9A49E8A</key>
 		<dict>
@@ -576,6 +605,13 @@
 			<key>fileRef</key>
 			<string>A02001656A0E6DDF6A804F71</string>
 		</dict>
+		<key>785949290545C65CED065655</key>
+		<dict>
+			<key>isa</key>
+			<string>PBXBuildFile</string>
+			<key>fileRef</key>
+			<string>A148BBDE5D66C948EF15F721</string>
+		</dict>
 		<key>5044DC7DCA3ED98A3BA347B1</key>
 		<dict>
 			<key>isa</key>
@@ -598,6 +634,7 @@
 			<string>2147483647</string>
 			<key>files</key>
 			<array>
+				<string>3F31B234A2E281D45B67B264</string>
 				<string>9F789B841F10F8C1F9A49E8A</string>
 				<string>CAFC0DA44891C6C5E7D0626F</string>
 				<string>5A5879FBC61D311463BDD5BA</string>
@@ -612,6 +649,7 @@
 				<string>2A0B6D81CE4B981EF7BDD7A1</string>
 				<string>2FA98A0714A2FE902D6F99F1</string>
 				<string>569E3E5ADB1546EAD571F9D9</string>
+				<string>785949290545C65CED065655</string>
 				<string>5044DC7DCA3ED98A3BA347B1</string>
 				<string>418C0747B7FDEED0C089413D</string>
 			</array>
@@ -723,6 +761,7 @@
 			<string>PBXGroup</string>
 			<key>children</key>
 			<array>
+				<string>FF12E8A2E4A5CEF6669A69E9</string>
 				<string>B4F713F917B60C279BAF6455</string>
 				<string>268AB1B690EEAE97145C5BDE</string>
 				<string>62942ACD3F1A6C7A72BEC534</string>
@@ -737,6 +776,7 @@
 				<string>5C7223930E216B667DB3838F</string>
 				<string>EE576DEFE51A407E29826DAD</string>
 				<string>A02001656A0E6DDF6A804F71</string>
+				<string>A148BBDE5D66C948EF15F721</string>
 				<string>C97D4044E1AC0D1395533A1D</string>
 				<string>C74240B9D8A91708E9EA3BD3</string>
 				<string>C51DC18A63DBBFD9E4AE04CC</string>

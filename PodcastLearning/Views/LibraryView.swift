@@ -3,6 +3,7 @@ import SwiftData
 import PodcastCore
 
 struct LibraryView: View {
+    @Environment(\.accentTheme) private var theme
     @Environment(AppStore.self) private var store
     @Environment(ClipPlayer.self) private var player
     @Environment(\.scenePhase) private var scenePhase
@@ -22,7 +23,7 @@ struct LibraryView: View {
                     Text("Library").font(.largeTitle.bold()).padding(.bottom, 20).accessibilityAddTraits(.isHeader)
                     if filtered.isEmpty {
                         ContentUnavailableView(search.isEmpty ? "Your Listening, Your Learning" : "No Matching Transcripts", systemImage: search.isEmpty ? "headphones" : "magnifyingglass",
-                            description: Text(search.isEmpty ? "Import an Apple Podcasts or Bilibili link, or English text to start learning." : "Try another title or show name."))
+                            description: Text(search.isEmpty ? "Paste text, import a PDF or Word document, or add a podcast or Bilibili link." : "Try another title or show name."))
                         if search.isEmpty { PrimaryButton(title: "New Transcript", symbol: "plus") { showImport = true } }
                     }
                     ForEach(filtered) { transcript in
@@ -48,7 +49,7 @@ struct LibraryView: View {
                             if !search.isEmpty { Button("Clear Search", systemImage: "xmark.circle.fill") { search = "" }.labelStyle(.iconOnly) }
                         }.padding(15).background(.regularMaterial, in: Capsule())
                         Button { showImport = true } label: { Image(systemName: "plus").font(.title2).frame(width: 48, height: 48) }
-                            .foregroundStyle(Palette.onAccent).background(Palette.accent, in: Circle()).accessibilityLabel("New Transcript")
+                            .foregroundStyle(Palette.onAccent).background(theme.color, in: Circle()).accessibilityLabel("New Transcript")
                     }.padding(.horizontal, 16).padding(.bottom, 8)
                 }
                 .navigationDestination(for: Transcript.self) { ReaderView(transcript: $0) }
@@ -67,6 +68,10 @@ struct LibraryView: View {
         .onOpenURL { url in
             if url.isFileURL {
                 do {
+                    if DocumentTextImporter.supports(url) {
+                        path.append(try store.importDocument(url))
+                        return
+                    }
                     let access = url.startAccessingSecurityScopedResource(); defer { if access { url.stopAccessingSecurityScopedResource() } }
                     guard (try url.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0) <= 5_000_000 else { throw ImportError.tooLarge }
                     let data = try Data(contentsOf: url)
@@ -96,6 +101,10 @@ struct LibraryView: View {
                 HStack {
                     if transcript.transcriptionState == "pending" { Label("Transcribing audio…", systemImage: "waveform").foregroundStyle(.secondary) }
                 else if transcript.transcriptionState == "failed" { Label("Transcription interrupted · Retry", systemImage: "arrow.clockwise").foregroundStyle(.red) }
+                else if transcript.synthesisState == "preparing" { Label("Preparing document…", systemImage: "sparkles").foregroundStyle(.secondary) }
+                else if transcript.synthesisState == "preparationFailed" { Label("Document processing interrupted · Retry", systemImage: "arrow.clockwise").foregroundStyle(.red) }
+                else if transcript.synthesisState == "pending" { Label("Generating audio…", systemImage: "waveform").foregroundStyle(.secondary) }
+                else if transcript.synthesisState == "failed" { Label("Audio generation interrupted · Retry", systemImage: "arrow.clockwise").foregroundStyle(.red) }
                 else if transcript.analysisState == "pending" { Label("Finding key sentences…", systemImage: "sparkles").foregroundStyle(Palette.ai) }
                     else if transcript.analysisState == "aiFailed" { Label("AI analysis failed · Retry", systemImage: "arrow.clockwise").foregroundStyle(.red) }
                     else { Label(transcript.activeItems.isEmpty ? "Ready to read" : mastered == transcript.activeItems.count ? "All mastered" : "\(transcript.activeItems.count - mastered) to practice", systemImage: mastered == transcript.activeItems.count && mastered > 0 ? "checkmark.circle" : "pencil")

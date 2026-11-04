@@ -11,6 +11,8 @@ struct InlineParagraphEditor: UIViewRepresentable {
     let advance: (DictationItem) -> Void
     @Environment(\.dynamicTypeSize) private var typeSize
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.colorSchemeContrast) private var contrast
+    @Environment(\.accentTheme) private var theme
 
     struct Snapshot: Equatable {
         let text: String
@@ -22,9 +24,11 @@ struct InlineParagraphEditor: UIViewRepresentable {
         let focus: UUID?
         let typeSize: DynamicTypeSize
         let scheme: ColorScheme
+        let contrast: ColorSchemeContrast
+        let theme: AccentTheme
     }
     private var snapshot: Snapshot {
-        Snapshot(text: paragraph.text, words: paragraph.items.map(\.text), ids: paragraph.items.map(\.id), attempt: attempt, inputs: inputs, retries: retries, focus: focused, typeSize: typeSize, scheme: colorScheme)
+        Snapshot(text: paragraph.text, words: paragraph.items.map(\.text), ids: paragraph.items.map(\.id), attempt: attempt, inputs: inputs, retries: retries, focus: focused, typeSize: typeSize, scheme: colorScheme, contrast: contrast, theme: theme)
     }
     func makeCoordinator() -> Coordinator { Coordinator(self) }
     func makeUIView(context: Context) -> UITextView {
@@ -83,7 +87,7 @@ struct InlineParagraphEditor: UIViewRepresentable {
             let strong = UIFont(descriptor: serif.fontDescriptor.withSymbolicTraits(.traitBold) ?? serif.fontDescriptor, size: 0)
             let style = NSMutableParagraphStyle(); style.lineSpacing = 8
             let base: [NSAttributedString.Key: Any] = [.font: serif, .foregroundColor: UIColor.label, .paragraphStyle: style]
-            let accent = UIColor(Palette.accent).resolvedColor(with: view.traitCollection)
+            let accent = UIColor(parent.theme.color).resolvedColor(with: view.traitCollection)
             let result = NSMutableAttributedString(string: "")
             let completed = Set(parent.paragraph.items.filter { parent.attempt.grade($0.id) != nil }.map(\.id))
             var speech: [String] = []

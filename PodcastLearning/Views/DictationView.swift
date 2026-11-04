@@ -2,6 +2,7 @@ import SwiftUI
 import PodcastCore
 
 struct DictationView: View {
+    @Environment(\.accentTheme) private var theme
     let transcript: Transcript
     let includeMastered: Bool
     @Environment(AppStore.self) private var store
@@ -49,7 +50,7 @@ struct DictationView: View {
                 .toolbar {
                     if index < queue.count {
                         ToolbarItem(placement: .topBarLeading) { Button("End Session", systemImage: "xmark") { exitConfirmation = true }.labelStyle(.iconOnly) }
-                        ToolbarItem(placement: .principal) { ProgressView(value: Double(index), total: Double(max(1, queue.count))).frame(maxWidth: 220).tint(Palette.accent) }
+                        ToolbarItem(placement: .principal) { ProgressView(value: Double(index), total: Double(max(1, queue.count))).frame(maxWidth: 220).tint(theme.color) }
                         ToolbarItem(placement: .topBarTrailing) { Text("\(min(index + 1, queue.count)) of \(queue.count)").accessibilityLabel("Paragraph \(min(index + 1, queue.count)) of \(queue.count)").font(.subheadline).foregroundStyle(.secondary).monospacedDigit() }
                     }
                 }
@@ -63,7 +64,7 @@ struct DictationView: View {
         ScrollView {
             VStack(spacing: 12) {
                 HStack {
-                    Text(answered ? "Answer" : secondTry ? "Second Try" : "First Try").font(.subheadline.weight(.semibold)).foregroundStyle(answered && paragraph.items.contains { attempt.grade($0.id) == .revealed } ? .red : Palette.accent)
+                    Text(answered ? "Answer" : secondTry ? "Second Try" : "First Try").font(.subheadline.weight(.semibold)).foregroundStyle(answered && paragraph.items.contains { attempt.grade($0.id) == .revealed } ? .red : theme.color)
                     Spacer()
                     if paragraph.items.count == 1, let item = paragraph.items.first {
                         if let level = item.level { LevelBadge(level: level) }
@@ -72,7 +73,7 @@ struct DictationView: View {
                 }
                 HStack(spacing: 12) {
                     Button { replay(paragraph) } label: {
-                        Image(systemName: "play.circle.fill").font(.largeTitle).foregroundStyle(Palette.accent).frame(width: 44, height: 44)
+                        Image(systemName: "play.circle.fill").font(.largeTitle).foregroundStyle(theme.color).frame(width: 44, height: 44)
                     }.buttonStyle(.plain).accessibilityLabel("Replay Paragraph")
                     VStack(alignment: .leading, spacing: 0) {
                         Waveform(progress: player.progress(in: paragraph.segment), seek: player.canSeek(paragraph, in: transcript) ? { fraction in player.seek(to: fraction, in: paragraph, transcript: transcript, settings: settings) } : nil)
@@ -138,7 +139,7 @@ struct DictationView: View {
                 }
                 HStack(spacing: 8) {
                     metric("First Try", symbol: "checkmark.circle", color: .green, count: results.filter { $0.grade == .firstTry }.count)
-                    metric("Second Try", symbol: "lightbulb", color: Palette.accent, count: results.filter { $0.grade == .secondTry }.count)
+                    metric("Second Try", symbol: "lightbulb", color: theme.color, count: results.filter { $0.grade == .secondTry }.count)
                     metric("Shown", symbol: "eye", color: .red, count: results.filter { $0.grade == .revealed }.count)
                 }
                 VStack(alignment: .leading, spacing: 8) {

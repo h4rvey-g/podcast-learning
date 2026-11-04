@@ -28,6 +28,8 @@ public enum ItemSource: String, CaseIterable, Sendable {
     public var analysisError: String?
     public var transcriptionState: String = "none"
     public var transcriptionError: String?
+    public var synthesisState: String = "none"
+    public var synthesisError: String?
     public var keepVideo: Bool = false
     public var createdAt: Date = Date()
     @Relationship(deleteRule: .cascade, inverse: \Segment.transcript) public var segments: [Segment]?

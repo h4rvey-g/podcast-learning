@@ -14,7 +14,8 @@ try {
   const file = join(dir, 'check.swift')
   writeFileSync(file, `import SwiftUI
 import AppKit
-enum Palette { static let accent = Color.purple }
+struct AccentTheme { var color = Color.purple }
+extension EnvironmentValues { @Entry var accentTheme = AccentTheme() }
 ${source.slice(start, end)}
 @MainActor func pixels(_ progress: Double) -> Data {
     let renderer = ImageRenderer(content: Waveform(progress: progress).frame(width: 280, height: 44))

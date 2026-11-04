@@ -14,11 +14,20 @@ struct SettingsView: View {
     @State private var testing = false
     @State private var deletingAudio: Transcript?
     @State private var storageRevision = 0
-    private var downloaded: [Transcript] { transcripts.filter { AudioStore.localURL($0.id) != nil } }
+    private var downloaded: [Transcript] { transcripts.filter { AudioStore.size($0.id) > 0 } }
     private var voices: [AVSpeechSynthesisVoice] { AVSpeechSynthesisVoice.speechVoices().filter { $0.language.hasPrefix("en-") }.sorted { $0.name < $1.name } }
     var body: some View {
         @Bindable var settings = settings
         Form {
+            Section("Appearance") {
+                Picker(selection: $settings.accentTheme) {
+                    ForEach(AccentTheme.allCases, id: \.self) { theme in
+                        Label { Text(theme.label) } icon: { Image(systemName: "circle.fill").foregroundStyle(theme.color) }.tag(theme)
+                    }
+                } label: {
+                    Label { Text("Accent Theme") } icon: { SettingsIcon(symbol: "paintpalette", color: settings.accentTheme.color) }
+                }.pickerStyle(.navigationLink)
+            }
             Section {
                 Picker(selection: $settings.targetLevel) { ForEach(CEFR.allCases, id: \.rawValue) { Text($0.rawValue).tag($0.rawValue) } } label: {
                     Label { Text("Target Level") } icon: { SettingsIcon(symbol: "gauge.with.dots.needle.50percent") }
@@ -40,6 +49,7 @@ struct SettingsView: View {
                 Toggle("Keep Bilibili Video", isOn: $settings.keepBilibiliVideo)
             } header: { Text("Bilibili Imports") } footer: { Text("Audio only by default. Keep Video saves a local video with sound for new imports; only audio is uploaded for transcription. Video uses more storage and data. Turning this off also skips video when retrying an interrupted transcription.") }
             Section("Speech") {
+                NavigationLink { SynthesisSettingsView() } label: { row("Generated Audio", value: settings.ttsModel, symbol: "waveform", color: .orange) }
                 Picker(selection: Binding(get: { settings.speechVoice?.identifier ?? settings.voice }, set: { settings.voice = $0 })) {
                     ForEach(voices, id: \.identifier) { voice in Text("\(voice.name) (\(voice.language == "en-GB" ? "UK" : String(voice.language.dropFirst(3))))").tag(voice.identifier) }
                 } label: { Label { Text("Voice") } icon: { SettingsIcon(symbol: "waveform", color: .orange) } }.pickerStyle(.navigationLink)
@@ -58,7 +68,7 @@ struct SettingsView: View {
             }.id(storageRevision)
         }.navigationTitle("Settings")
             .onAppear { readKey() }
-            .confirmationDialog("Delete downloaded audio, video, and transcription transfer files? The transcript and word progress are kept.", isPresented: Binding(get: { deletingAudio != nil }, set: { if !$0 { deletingAudio = nil } }), titleVisibility: .visible) {
+            .confirmationDialog("Delete downloaded media and document processing files? Saved text and word progress are kept. Unfinished document sessions will need the original file imported again.", isPresented: Binding(get: { deletingAudio != nil }, set: { if !$0 { deletingAudio = nil } }), titleVisibility: .visible) {
                 Button("Delete Media", role: .destructive) {
                     if let transcript = deletingAudio { do { try AudioStore.delete(transcript.id); storageRevision += 1 } catch { store.error = error.localizedDescription } }
                     deletingAudio = nil
@@ -95,7 +105,7 @@ struct SettingsView: View {
                 HStack {
                     VStack(alignment: .leading, spacing: 4) { Text(transcript.title); Text(ByteCountFormatter.string(fromByteCount: AudioStore.size(transcript.id), countStyle: .file)).font(.footnote).foregroundStyle(.secondary) }
                     Spacer()
-                    Button("Delete Media", systemImage: "trash", role: .destructive) { deletingAudio = transcript }.labelStyle(.iconOnly).buttonStyle(.borderless).frame(width: 44, height: 44).disabled(store.transcribing.contains(transcript.id) || store.downloading.contains(transcript.id))
+                    Button("Delete Media", systemImage: "trash", role: .destructive) { deletingAudio = transcript }.labelStyle(.iconOnly).buttonStyle(.borderless).frame(width: 44, height: 44).disabled(store.transcribing.contains(transcript.id) || store.downloading.contains(transcript.id) || store.synthesizing.contains(transcript.id))
                 }
             }
             if downloaded.isEmpty { Text("No media downloaded").foregroundStyle(.secondary) }
@@ -107,7 +117,34 @@ struct SettingsView: View {
             Link("CEFR-J Project", destination: URL(string: "https://www.cefr-j.org/")!)
             Link("Octanove Vocabulary Profile · CC BY-SA", destination: URL(string: "https://github.com/openlanguageprofiles/olp-en-cefrj")!)
             Link("CC BY-SA 4.0 License", destination: URL(string: "https://creativecommons.org/licenses/by-sa/4.0/")!)
-            Text("Transcripts via PodText and Microsoft MAI-Transcribe-2. Audio and transcripts belong to their respective publishers. Swift AI SDK by teunlao (Apache 2.0) and Alamofire (MIT).").font(.footnote).foregroundStyle(.secondary)
+            Text("Transcripts via PodText and Microsoft MAI-Transcribe-2. Audio and transcripts belong to their respective publishers. Swift AI SDK by teunlao (Apache 2.0), Alamofire (MIT), and ZIPFoundation (MIT).").font(.footnote).foregroundStyle(.secondary)
+            NavigationLink("ZIPFoundation · MIT License") {
+                ScrollView {
+                    Text("""
+                        MIT License
+
+                        Copyright (c) 2017-2025 Thomas Zoechling (https://www.peakstep.com)
+
+                        Permission is hereby granted, free of charge, to any person obtaining a copy
+                        of this software and associated documentation files (the "Software"), to deal
+                        in the Software without restriction, including without limitation the rights
+                        to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+                        copies of the Software, and to permit persons to whom the Software is
+                        furnished to do so, subject to the following conditions:
+
+                        The above copyright notice and this permission notice shall be included in all
+                        copies or substantial portions of the Software.
+
+                        THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+                        IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+                        FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+                        AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+                        LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+                        OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+                        SOFTWARE.
+                        """).font(.footnote).textSelection(.enabled).padding()
+                }.navigationTitle("ZIPFoundation")
+            }
         }.navigationTitle("Acknowledgments")
     }
     private func readKey() {

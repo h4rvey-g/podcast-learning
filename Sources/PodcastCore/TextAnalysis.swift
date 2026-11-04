@@ -6,7 +6,7 @@ public enum ImportError: LocalizedError {
     public var errorDescription: String? {
         switch self {
         case .invalidURL: return "Enter an Apple Podcasts episode link, including its episode ID."
-        case .emptyText: return "No transcript text was found. Paste some text or choose a TXT, SRT, or VTT file."
+        case .emptyText: return "No transcript text was found. Paste some text or choose a PDF, DOC, DOCX, TXT, SRT, or VTT file."
         case .invalidResponse: return "The service returned an unreadable response. Try again or import text instead."
         case .service(let message): return message
         case .tooLarge: return "This transcript is too large. Import a file smaller than 5 MB."
@@ -41,8 +41,12 @@ public enum TextImporter {
     }
     @MainActor public static func makeTranscript(title: String, paragraphs: [String], author: String = "Pasted text") -> Transcript {
         let transcript = Transcript(title: title, author: author)
+        transcript.segments = makeSegments(paragraphs)
+        return transcript
+    }
+    @MainActor public static func makeSegments(_ paragraphs: [String]) -> [Segment] {
         var index = 0
-        transcript.segments = paragraphs.enumerated().map { offset, text in
+        return paragraphs.enumerated().map { offset, text in
             let segment = Segment(index: offset, text: text)
             segment.sentences = sentences(text).map { text in
                 defer { index += 1 }
@@ -50,7 +54,6 @@ public enum TextImporter {
             }
             return segment
         }
-        return transcript
     }
 }
 

@@ -12,6 +12,10 @@ import PodcastCore
     func completion(system: String, input: String, schema: AIResponseSchema? = nil) async throws -> String {
         try await client().completion(system: system, input: input, schema: schema)
     }
+    func cleanText(_ input: String) async throws -> [String] {
+        guard settings.aiConsent else { throw ImportError.service("Enable AI in Settings → Provider before cleaning text.") }
+        return try await client().cleanText(input)
+    }
     func availableModels() async throws -> [String] {
         try await client().availableModels()
     }
