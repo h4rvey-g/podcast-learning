@@ -9,6 +9,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 jobs:
   ipa:
     runs-on: macos-26
@@ -82,3 +86,31 @@ jobs:
               --title "PodLearn $VERSION" \
               --notes "Unsigned PodLearn $VERSION (build $BUILD). Install with SideStore or LiveContainer; either re-signs the IPA with your own Apple ID. Share extension included."
           fi
+
+  # Keeps https://raw.githubusercontent.com/<repo>/main/source.json in sync so SideStore
+  # users get an in-place update. Rebuilt from the releases API, so it self-heals.
+  source:
+    needs: ipa
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+
+      - name: Regenerate SideStore source
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/build_source.py
+
+      - name: Commit source.json
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add source.json
+          if git diff --cached --quiet; then
+            echo 'source.json is already current'
+            exit 0
+          fi
+          git commit -m 'Publish SideStore source update'
+          git push

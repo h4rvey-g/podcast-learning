@@ -95,6 +95,18 @@ git tag v1.0 && git push origin v1.0
 
 The tag must equal `v<CFBundleShortVersionString>` or the job fails before building. The IPA is **unsigned** — SideStore and LiveContainer re-sign it on the phone with your own account, so no certificates are stored in GitHub. The share extension is included; use `build/PodcastLearning-SideStore.ipa` only when installing through SideStore. Manual runs (`gh workflow run release.yml`) build from the current commit and republish the same tag.
 
+### SideStore source
+
+Add this URL to SideStore (**Sources → +**) to install PodLearn and receive in-place updates:
+
+```
+https://raw.githubusercontent.com/h4rvey-g/podcast-learning/main/source.json
+```
+
+`source.json` is committed at the repository root and regenerated after every release by `scripts/build_source.py` (run locally with `GH_TOKEN=… python3 scripts/build_source.py`). It lists every published `PodLearn-*-unsigned.ipa` with its version, size, and download URL, newest first.
+
+The source advertises `APP_BUNDLE_ID` from `Config.xcconfig`. SideStore matches updates by that identifier: changing it makes the released app a *different* app, so an existing install is not updated. Keep the ID stable, or update SideStore by hand and let it replace the app of the same ID (which preserves its data).
+
 Tests cover answer normalization, hint/attempt states, Leitner transitions and queues, SwiftData persistence/cascade deletion, duplicate memories, subtitle parsing, CEFR lookup/lemmatization, names and thresholds, PodText/iTunes/RSS fixtures, HTTP failures, shared payloads, and AI response/schema validation. Bilibili/STT tests cover canonical/shared links, WBI signatures, audio-only versus video resolution, paid-preview rejection, backup CDNs, interrupted uploads and response bodies, throttling, retry exhaustion, authentication failures, disk-backed multipart contents, cached-result reuse, timestamp validation, real WAV conversion, and MP4 audio/video muxing. Normal test runs do not make live API calls; the opt-in suite below does.
 
 ### Opt-in live provider tests
