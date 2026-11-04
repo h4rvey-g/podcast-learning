@@ -114,7 +114,7 @@ struct LiveProviderTests {
         do {
             let text = try await credentials.aiClient().completion(
                 system: "Return JSON analysis for an English learner. Select sentence 0 as a key sentence with a short Chinese note. Leave extraItems and glosses empty. Return only keySentences, extraItems, and glosses.",
-                input: "Sentence 0: Learning a language requires perseverance.", json: true, maxTokens: 4096)
+                input: "Sentence 0: Learning a language requires perseverance.", schema: .transcriptAnalysis, maxTokens: 4096)
             let analysis = try JSONDecoder().decode(AIAnalysis.self, from: Data(text.utf8))
             analysis.apply(to: transcript)
             guard transcript.sentences.first?.isKey == true, transcript.sentences.first?.keyNoteZh?.isEmpty == false else {

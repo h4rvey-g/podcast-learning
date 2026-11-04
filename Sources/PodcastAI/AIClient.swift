@@ -30,6 +30,23 @@ public enum AIProviderAPI: String, CaseIterable, Sendable {
     }
 }
 
+public enum AIResponseSchema: String, Sendable {
+    case transcriptAnalysis = "transcript_analysis", wordDetails = "word_details"
+
+    func data() throws -> Data {
+        switch self {
+        case .transcriptAnalysis: return try AIAnalysis.schemaData()
+        case .wordDetails:
+            return try JSONSerialization.data(withJSONObject: [
+                "type": "object",
+                "properties": ["glossZh": ["type": "string"], "definitionEn": ["type": "string"], "phonetic": ["type": "string"]],
+                "required": ["definitionEn", "glossZh", "phonetic"],
+                "additionalProperties": false
+            ], options: .sortedKeys)
+        }
+    }
+}
+
 public struct AIClient: Sendable {
     private let baseURL: String
     private let model: String
@@ -50,17 +67,17 @@ public struct AIClient: Sendable {
     }
     public func testConnection() async throws {
         do {
-            _ = try await generate(system: "Reply with OK.", input: "Connection test", json: false, maxTokens: 32, connectionTest: true)
+            _ = try await generate(system: "Reply with OK.", input: "Connection test", schema: nil, maxTokens: 32, connectionTest: true)
         } catch is CancellationError where !Task.isCancelled {
             throw ImportError.service("The connection test timed out after 15 seconds. Check your provider or try again.")
         } catch let error as URLError where error.code == .timedOut {
             throw ImportError.service("The connection test timed out after 15 seconds. Check your provider or try again.")
         }
     }
-    public func completion(system: String, input: String, json: Bool = false, maxTokens: Int? = nil) async throws -> String {
-        try await generate(system: system, input: input, json: json, maxTokens: maxTokens, connectionTest: false)
+    public func completion(system: String, input: String, schema: AIResponseSchema? = nil, maxTokens: Int? = nil) async throws -> String {
+        try await generate(system: system, input: input, schema: schema, maxTokens: maxTokens, connectionTest: false)
     }
-    private func generate(system: String, input: String, json: Bool, maxTokens: Int?, connectionTest: Bool) async throws -> String {
+    private func generate(system: String, input: String, schema: AIResponseSchema?, maxTokens: Int?, connectionTest: Bool) async throws -> String {
         guard !model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw ImportError.service("Choose a model in Settings first.") }
         let send = fetch ?? defaultFetchFunction()
         let thinking = connectionTest ? .providerDefault : thinking, api = api
@@ -102,14 +119,14 @@ public struct AIClient: Sendable {
         case .gemini:
             languageModel = try createGoogle(settings: .init(baseURL: baseURL, apiKey: key, fetch: checkedFetch)).languageModel(modelId: model)
         }
-        let schema = json ? try JSONDecoder().decode(JSONValue.self, from: AIAnalysis.schemaData()) : nil
-        func request(_ schema: JSONValue?) async throws -> String {
-            let output = Output.Specification<String, String>(name: "transcript",
-                responseFormat: { json ? .json(schema: schema, name: "transcript_analysis", description: nil) : .text },
+        let jsonSchema = try schema.map { try JSONDecoder().decode(JSONValue.self, from: $0.data()) }
+        func request(_ jsonSchema: JSONValue?) async throws -> String {
+            let output = Output.Specification<String, String>(name: schema?.rawValue ?? "text",
+                responseFormat: { schema != nil ? .json(schema: jsonSchema, name: schema?.rawValue, description: nil) : .text },
                 parsePartial: { $0 }, parseOutput: { text, _ in text })
             let result = try await generateText(model: languageModel, instructions: .text(system), prompt: input,
                 output: output, providerOptions: api == .chat || api == .responses ? ["openai": ["store": .bool(false)]] : nil,
-                settings: CallSettings(maxOutputTokens: maxTokens ?? (json ? 12000 : 2000),
+                settings: CallSettings(maxOutputTokens: maxTokens ?? (schema == .transcriptAnalysis ? 12000 : 2000),
                     reasoning: thinking == .providerDefault ? nil : LanguageModelV4ReasoningEffort(rawValue: thinking.rawValue),
                     maxRetries: 0, abortSignal: { Task.isCancelled }, timeout: .milliseconds(connectionTest ? 15_000 : 180_000)))
             // A reasoning model can spend the probe's entire budget without emitting text.
@@ -121,8 +138,8 @@ public struct AIClient: Sendable {
             return result.text
         }
         do {
-            do { return try await request(schema) }
-            catch let failure as APICallError where json && Self.rejectedFormat(failure) { return try await request(nil) }
+            do { return try await request(jsonSchema) }
+            catch let failure as APICallError where schema != nil && Self.rejectedFormat(failure) { return try await request(nil) }
         } catch let failure as APICallError {
             // Provider bodies may echo input or credentials; keep them out of UI and test diagnostics.
             throw ImportError.service("The AI provider could not complete the request (HTTP \(failure.statusCode ?? 0)). Check the model, thinking level, key, and provider settings.")

@@ -53,7 +53,7 @@ private actor ProviderStub {
         let stub = ProviderStub()
         let client = try AIClient(baseURL: "https://provider.example/v1", model: "gpt-6.1-sol", key: "test-key", api: api,
                                   thinking: .medium, fetch: { try await stub.fetch($0) })
-        #expect(try await client.completion(system: "Reply OK", input: "Test", json: true) == "OK")
+        #expect(try await client.completion(system: "Reply OK", input: "Test", schema: .transcriptAnalysis) == "OK")
         let request = try #require(await stub.snapshot().first)
         #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer test-key")
         let body = try #require(JSONSerialization.jsonObject(with: request.httpBody!) as? [String: Any])
@@ -88,12 +88,12 @@ private actor ProviderStub {
         let stub = ProviderStub(failure: status, parameter: parameter)
         let client = try AIClient(baseURL: "https://provider.example/v1", model: "gpt-6.1-sol", key: "test-key", fetch: { try await stub.fetch($0) })
         if count == 2 {
-            _ = try await client.completion(system: "Return JSON", input: "Test", json: true)
+            _ = try await client.completion(system: "Return JSON", input: "Test", schema: .transcriptAnalysis)
             let requests = await stub.snapshot()
             let body = try #require(JSONSerialization.jsonObject(with: requests[1].httpBody!) as? [String: Any])
             #expect((body["response_format"] as? [String: Any])?["type"] as? String == "json_object")
         } else {
-            await #expect(throws: ImportError.self) { try await client.completion(system: "Return JSON", input: "Test", json: true) }
+            await #expect(throws: ImportError.self) { try await client.completion(system: "Return JSON", input: "Test", schema: .transcriptAnalysis) }
         }
         #expect(await stub.snapshot().count == count)
     }
@@ -115,12 +115,92 @@ private actor ProviderStub {
 
 private let nativeProviders: [(AIProviderAPI, String)] = [(.anthropic, "claude-sonnet-4-6"), (.gemini, "gemini-3-flash-preview")]
 
+@Test func wordDetailsSchemaReachesEveryProvider() async throws {
+    let text = #"{"glossZh":"毅力","definitionEn":"continued effort","phonetic":"/ˌpɜːsəˈvɪərəns/"}"#
+    for (api, model) in [(AIProviderAPI.chat, "gpt-5.1"), (.responses, "gpt-5.1")] + nativeProviders {
+        let stub = ProviderStub(text: text)
+        let client = try AIClient(baseURL: "https://provider.example/v1", model: model, key: "test-key", api: api,
+                                  fetch: { try await stub.fetch($0) })
+        #expect(try await client.completion(system: "Return JSON word details", input: "perseverance", schema: .wordDetails) == text)
+        let requests = await stub.snapshot()
+        #expect(requests.count == 1)
+        let request = try #require(requests.first)
+        let body = try #require(JSONSerialization.jsonObject(with: request.httpBody!) as? [String: Any])
+        let schema: [String: Any]?
+        switch api {
+        case .chat, .responses:
+            let format = api == .chat ? body["response_format"] as? [String: Any]
+                : (body["text"] as? [String: Any])?["format"] as? [String: Any]
+            #expect(format?["type"] as? String == "json_schema")
+            let definition = api == .chat ? format?["json_schema"] as? [String: Any] : format
+            #expect(definition?["name"] as? String == "word_details")
+            #expect(definition?["strict"] as? Bool == true)
+            schema = definition?["schema"] as? [String: Any]
+        case .anthropic:
+            let format = (body["output_config"] as? [String: Any])?["format"] as? [String: Any]
+            #expect(format?["type"] as? String == "json_schema")
+            schema = format?["schema"] as? [String: Any]
+        case .gemini:
+            let config = body["generationConfig"] as? [String: Any]
+            #expect(config?["responseMimeType"] as? String == "application/json")
+            schema = config?["responseJsonSchema"] as? [String: Any]
+        }
+        let expected: [String: Any] = [
+            "type": "object",
+            "properties": ["glossZh": ["type": "string"], "definitionEn": ["type": "string"], "phonetic": ["type": "string"]],
+            "required": ["definitionEn", "glossZh", "phonetic"],
+            "additionalProperties": false
+        ]
+        #expect(NSDictionary(dictionary: try #require(schema)).isEqual(to: expected))
+    }
+}
+
+@Test func wordDetailsKeepsSchemaRejectionFallback() async throws {
+    for (api, model) in [(AIProviderAPI.chat, "gpt-5.1"), (.responses, "gpt-5.1")] + nativeProviders {
+        let parameter: String
+        switch api {
+        case .chat: parameter = "response_format"
+        case .responses: parameter = "text.format"
+        case .anthropic: parameter = "output_config.format"
+        case .gemini: parameter = "generationConfig.responseJsonSchema"
+        }
+        for (status, rejected, count) in [(400, parameter, 2), (401, parameter, 1), (400, "thinking", 1)] {
+            let stub = ProviderStub(failure: status, parameter: rejected)
+            let client = try AIClient(baseURL: "https://provider.example/v1", model: model, key: "test-key", api: api,
+                                      fetch: { try await stub.fetch($0) })
+            if count == 2 {
+                #expect(try await client.completion(system: "Return JSON word details", input: "perseverance", schema: .wordDetails) == "OK")
+                let requests = await stub.snapshot()
+                let body = try #require(JSONSerialization.jsonObject(with: requests[1].httpBody!) as? [String: Any])
+                switch api {
+                case .chat:
+                    #expect((body["response_format"] as? [String: Any])?["type"] as? String == "json_object")
+                case .responses:
+                    let format = (body["text"] as? [String: Any])?["format"] as? [String: Any]
+                    #expect(format?["type"] as? String == "json_object")
+                case .anthropic:
+                    #expect((body["output_config"] as? [String: Any])?["format"] == nil)
+                case .gemini:
+                    let config = body["generationConfig"] as? [String: Any]
+                    #expect(config?["responseMimeType"] as? String == "application/json")
+                    #expect(config?["responseJsonSchema"] == nil)
+                }
+            } else {
+                await #expect(throws: ImportError.self) {
+                    try await client.completion(system: "Return JSON word details", input: "perseverance", schema: .wordDetails)
+                }
+            }
+            #expect(await stub.snapshot().count == count)
+        }
+    }
+}
+
 @Test func nativeProvidersSendAuthenticationPromptsThinkingAndSchema() async throws {
     for (api, model) in nativeProviders {
         let stub = ProviderStub()
         let client = try AIClient(baseURL: "https://provider.example/custom/api/", model: model, key: "test-key", api: api,
                                   thinking: .medium, fetch: { try await stub.fetch($0) })
-        #expect(try await client.completion(system: "System instructions", input: "Transcript input", json: true) == "OK")
+        #expect(try await client.completion(system: "System instructions", input: "Transcript input", schema: .transcriptAnalysis) == "OK")
         let request = try #require(await stub.snapshot().first)
         let body = try #require(JSONSerialization.jsonObject(with: request.httpBody!) as? [String: Any])
         #expect(request.value(forHTTPHeaderField: "Authorization") == nil)
@@ -208,13 +288,13 @@ private let nativeProviders: [(AIProviderAPI, String)] = [(.anthropic, "claude-s
             let client = try AIClient(baseURL: "https://provider.example/v1", model: model, key: "test-key", api: api,
                                       fetch: { try await stub.fetch($0) })
             if count == 2 {
-                #expect(try await client.completion(system: "Return JSON", input: "Test", json: true) == "OK")
+                #expect(try await client.completion(system: "Return JSON", input: "Test", schema: .transcriptAnalysis) == "OK")
                 let requests = await stub.snapshot()
                 let body = try #require(JSONSerialization.jsonObject(with: requests[1].httpBody!) as? [String: Any])
                 #expect((body["output_config"] as? [String: Any])?["format"] == nil)
                 #expect((body["generationConfig"] as? [String: Any])?["responseJsonSchema"] == nil)
             } else {
-                await #expect(throws: ImportError.self) { try await client.completion(system: "Return JSON", input: "Test", json: true) }
+                await #expect(throws: ImportError.self) { try await client.completion(system: "Return JSON", input: "Test", schema: .transcriptAnalysis) }
             }
             #expect(await stub.snapshot().count == count)
         }
