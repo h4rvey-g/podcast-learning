@@ -50,7 +50,7 @@ jobs:
           path: SourcePackages
           key: spm-${{ runner.os }}-${{ hashFiles('Package.resolved') }}
 
-      # Unsigned on purpose: SideStore/LiveContainer re-sign on the phone with your own account.
+      # No developer certificate: packaging adds ad-hoc entitlement claims for re-signing.
       - name: Build app and share extension
         run: |
           set -euo pipefail
@@ -67,7 +67,37 @@ jobs:
           mkdir -p build/Payload
           ditto DerivedData/Build/Products/Release-iphoneos/PodcastLearning.app \
             build/Payload/PodcastLearning.app
-          test -d build/Payload/PodcastLearning.app/PlugIns/ShareExtension.appex
+          # SideStore drops profile entitlements absent from the incoming executable's signature.
+          python3 - <<'PY'
+          import plistlib
+          import subprocess
+          import tempfile
+          from pathlib import Path
+
+          app = Path("build/Payload/PodcastLearning.app")
+          targets = [
+              (app / "PlugIns/ShareExtension.appex", Path("ShareExtension/ShareExtension.entitlements")),
+              (app, Path("PodcastLearning/PodcastLearning.entitlements")),
+          ]
+          groups = [plistlib.loads((bundle / "Info.plist").read_bytes()).get("AppGroupIdentifier")
+                    for bundle, _ in targets]
+          assert all(isinstance(group, str) and group.startswith("group.") and "$(" not in group
+                     for group in groups), f"Missing or unresolved App Group: {groups}"
+          assert groups[0] == groups[1], f"App and share extension groups differ: {groups}"
+          with tempfile.TemporaryDirectory() as temporary:
+              path = Path(temporary) / "Entitlements.plist"
+              for (bundle, template), group in zip(targets, groups):
+                  entitlements = plistlib.loads(template.read_bytes())
+                  entitlements["com.apple.security.application-groups"] = [group]
+                  data = plistlib.dumps(entitlements)
+                  assert b"$(" not in data, f"Unresolved entitlement in {template}"
+                  path.write_bytes(data)
+                  subprocess.run(["codesign", "--force", "--sign", "-", "--timestamp=none",
+                                  "--generate-entitlement-der", "--entitlements", str(path), str(bundle)], check=True)
+                  signed = subprocess.check_output(["codesign", "--display", "--entitlements", "-", "--xml", str(bundle)])
+                  assert plistlib.loads(signed) == entitlements, f"Lost entitlements in {bundle}"
+                  subprocess.run(["codesign", "--verify", "--strict", str(bundle)], check=True)
+          PY
           ditto -c -k --norsrc --noextattr --noqtn --keepParent \
             build/Payload "build/PodLearn-${VERSION}-unsigned.ipa"
           ls -lh build/*.ipa

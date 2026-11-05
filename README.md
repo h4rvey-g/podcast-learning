@@ -119,7 +119,9 @@ swift test
 git tag v1.0 && git push origin v1.0
 ```
 
-The tag must equal `v<CFBundleShortVersionString>` or the job fails before building. The IPA is **unsigned** — SideStore and LiveContainer re-sign it on the phone with your own account, so no certificates are stored in GitHub. The share extension is included; use `build/PodcastLearning-SideStore.ipa` only when installing through SideStore. Manual runs (`gh workflow run release.yml`) build from the current commit and republish the same tag.
+The tag must equal `v<CFBundleShortVersionString>` or the job fails before building. The IPA has **no developer signature** — SideStore and LiveContainer re-sign it on the phone with your own account, so no certificates are stored in GitHub. Packaging adds certificate-free **ad-hoc signatures** with the App Group entitlements to both the app and share extension, then reads back those claims and verifies both signatures. SideStore drops profile entitlements absent from the incoming executable's signature; a completely unsigned binary can therefore lose App Group access even when its installed profile lists the correct group. The `-unsigned.ipa` filename is retained for SideStore source compatibility; it means the package still requires re-signing to install.
+
+The share extension is included; use the standalone IPA rather than `build/PodcastLearning-LiveContainer.ipa` when installing through SideStore. Keep app extensions when prompted and update the existing installation to preserve your library. Manual runs (`gh workflow run release.yml`) build from the current commit and republish the same tag.
 
 ### SideStore source
 
