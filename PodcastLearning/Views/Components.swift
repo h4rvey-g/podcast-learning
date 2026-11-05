@@ -22,17 +22,27 @@ struct ImportProgressView: View {
         if let progress = store.importProgress(transcript) {
             VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 8) {
-                    if progress.fraction == nil { ProgressView().controlSize(.small).accessibilityHidden(true) }
+                    ProgressView().controlSize(.small).accessibilityHidden(true)
                     Text(progress.title).frame(maxWidth: .infinity, alignment: .leading)
-                    if let fraction = progress.fraction {
-                        Text(fraction, format: .percent.precision(.fractionLength(0))).monospacedDigit()
-                    }
                 }.font(.footnote).foregroundStyle(.secondary)
-                if let fraction = progress.fraction {
-                    ProgressView(value: fraction).tint(theme.color)
-                        .accessibilityLabel(progress.title)
-                }
-            }.accessibilityElement(children: .combine)
+                ProgressView(value: progress.fraction).tint(theme.color)
+                    .accessibilityLabel("Import steps")
+                    .accessibilityValue("\(progress.completed) of \(progress.steps.count) complete")
+                DisclosureGroup("\(progress.completed) of \(progress.steps.count) steps complete") {
+                    ForEach(progress.steps) { step in
+                        HStack(spacing: 8) {
+                            if step.state == .running { ProgressView().controlSize(.mini) }
+                            else { Image(systemName: step.state == .done ? "checkmark.circle.fill" : step.state == .failed ? "exclamationmark.circle" : "circle") }
+                            Text(step.title)
+                            Spacer(minLength: 0)
+                            if let fraction = step.fraction, step.state == .running {
+                                Text(fraction, format: .percent.precision(.fractionLength(0))).monospacedDigit()
+                            }
+                        }.accessibilityElement(children: .combine)
+                            .accessibilityValue(step.state == .done ? "Complete" : step.state == .failed ? "Failed" : step.state == .running ? "In progress" : "Waiting")
+                    }
+                }.font(.caption).foregroundStyle(.secondary)
+            }
         }
     }
 }

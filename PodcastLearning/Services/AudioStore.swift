@@ -78,22 +78,24 @@ import PodcastCore
         ["preparing", "pending", "preparationFailed", "failed"].contains(transcript.synthesisState) &&
         AudioStore.localURL(transcript.id) == nil
     }
-    func play(text: String, segment: Segment? = nil, transcript: Transcript? = nil, settings: SettingsStore, clip: Bool = true, startAt: Double? = nil) {
+    func play(text: String, segment: Segment? = nil, transcript: Transcript? = nil, settings: SettingsStore, clip: Bool = true, startAt: Double? = nil, readyAudio: URL? = nil) {
         stop()
-        if let transcript, isWaitingForAudio(transcript, settings: settings) {
+        if let transcript, isWaitingForAudio(transcript, settings: settings), readyAudio == nil {
             error = "AI audio is not ready. Wait for generation to finish, or retry document processing or audio generation in the reader."
             return
         }
         guard activate() else { return }
         error = nil
         segmentID = segment?.id; transcriptID = transcript?.id; speechProgress = 0
-        let range = PlaybackRange(start: segment?.start ?? -1, end: segment?.end ?? 0)
+        let paragraphFile = transcript.flatMap { AudioStore.localURL($0.id) } == nil ? readyAudio : nil
+        let range = paragraphFile == nil ? PlaybackRange(start: segment?.start ?? -1, end: segment?.end ?? 0) : nil
         let validTiming = range != nil
-        if let transcript, let url = AudioStore.localURL(transcript.id), !clip || validTiming {
+        if let transcript, let url = AudioStore.localURL(transcript.id) ?? paragraphFile, !clip || validTiming || paragraphFile != nil {
             if currentURL != url { player.replaceCurrentItem(with: AVPlayerItem(url: url)); currentURL = url; position = 0 }
-            let start = startAt ?? (clip ? max(0, (range?.start ?? 0) - 0.3) : position)
+            generatedPlayback = paragraphFile != nil
+            let start = paragraphFile != nil ? 0 : startAt ?? (clip ? max(0, (range?.start ?? 0) - 0.3) : position)
             position = start
-            audioTranscript = transcript
+            audioTranscript = paragraphFile == nil ? transcript : nil
             activeSegmentID = segment?.id ?? ClipPlayer.segmentID(at: start, in: transcript)
             let request = playbackRequest
             if clip, let end = range?.end {
@@ -165,9 +167,9 @@ import PodcastCore
     private func isCurrent(_ segment: Segment, in transcript: Transcript) -> Bool {
         transcriptID == transcript.id && activeSegmentID == segment.id
     }
-    func toggleParagraph(_ segment: Segment, transcript: Transcript, settings: SettingsStore) {
-        if !isWaitingForAudio(transcript, settings: settings), isCurrent(segment, in: transcript) { toggleCurrent() }
-        else { play(text: segment.text, segment: segment, transcript: transcript, settings: settings) }
+    func toggleParagraph(_ segment: Segment, transcript: Transcript, settings: SettingsStore, readyAudio: URL? = nil) {
+        if (!isWaitingForAudio(transcript, settings: settings) || readyAudio != nil), isCurrent(segment, in: transcript) { toggleCurrent() }
+        else { play(text: segment.text, segment: segment, transcript: transcript, settings: settings, readyAudio: readyAudio) }
     }
     private func toggleCurrent() {
         if synthesisTask != nil { stop(); return }

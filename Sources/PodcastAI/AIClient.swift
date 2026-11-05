@@ -80,10 +80,17 @@ public struct AIClient: Sendable {
             throw ImportError.service("The connection test timed out after 15 seconds. Check your provider or try again.")
         }
     }
-    public func completion(system: String, input: String, schema: AIResponseSchema? = nil, maxTokens: Int? = nil) async throws -> String {
-        try await generate(system: system, input: input, schema: schema, maxTokens: maxTokens, connectionTest: false)
+    public func completion(system: String, input: String, schema: AIResponseSchema? = nil, maxTokens: Int? = nil,
+                           onDelta: (@Sendable (String) async throws -> Void)? = nil,
+                           onElement: (@Sendable (String, Data) async throws -> Void)? = nil) async throws -> String {
+        try await generate(system: system, input: input, schema: schema, maxTokens: maxTokens, connectionTest: false, onDelta: onDelta, onElement: onElement)
     }
-    private func generate(system: String, input: String, schema: AIResponseSchema?, maxTokens: Int?, connectionTest: Bool) async throws -> String {
+    private func generate(system: String, input: String, schema: AIResponseSchema?, maxTokens: Int?, connectionTest: Bool,
+                          onDelta: (@Sendable (String) async throws -> Void)? = nil,
+                          onElement: (@Sendable (String, Data) async throws -> Void)? = nil) async throws -> String {
+        let cancellation = AIRequestCancellation()
+        defer { cancellation.cancel() }
+        try Task.checkCancellation()
         guard !model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw ImportError.service("Choose a model in Settings first.") }
         let send = fetch ?? defaultFetchFunction()
         let thinking = connectionTest ? .providerDefault : thinking, api = api
@@ -126,35 +133,68 @@ public struct AIClient: Sendable {
             languageModel = try createGoogle(settings: .init(baseURL: baseURL, apiKey: key, fetch: checkedFetch)).languageModel(modelId: model)
         }
         let jsonSchema = try schema.map { try JSONDecoder().decode(JSONValue.self, from: $0.data()) }
+        var emitted = false
         func request(_ jsonSchema: JSONValue?) async throws -> String {
             let output = Output.Specification<String, String>(name: schema?.rawValue ?? "text",
                 responseFormat: { schema != nil ? .json(schema: jsonSchema, name: schema?.rawValue, description: nil) : .text },
                 parsePartial: { $0 }, parseOutput: { text, _ in text })
-            let result = try await generateText(model: languageModel, instructions: .text(system), prompt: input,
-                output: output, providerOptions: api == .chat || api == .responses ? ["openai": ["store": .bool(false)]] : nil,
-                settings: CallSettings(maxOutputTokens: maxTokens ?? (schema == .transcriptAnalysis ? 12000 : 2000),
-                    reasoning: thinking == .providerDefault ? nil : LanguageModelV4ReasoningEffort(rawValue: thinking.rawValue),
-                    maxRetries: 0, abortSignal: { Task.isCancelled }, timeout: .milliseconds(connectionTest ? 15_000 : 180_000)))
-            // A reasoning model can spend the probe's entire budget without emitting text.
-            if connectionTest {
-                guard result.finishReason == .stop || result.finishReason == .length else { throw ImportError.invalidResponse }
+            let options: ProviderOptions? = api == .chat || api == .responses ? ["openai": ["store": .bool(false)]] : nil
+            let settings = CallSettings(maxOutputTokens: maxTokens ?? (schema == .transcriptAnalysis ? 12000 : 2000),
+                reasoning: thinking == .providerDefault ? nil : LanguageModelV4ReasoningEffort(rawValue: thinking.rawValue),
+                maxRetries: 0, abortSignal: { cancellation.isCancelled || Task.isCancelled },
+                timeout: .milliseconds(connectionTest ? 15_000 : 180_000))
+            let text: String
+            let finish: FinishReason
+            if onDelta != nil || onElement != nil {
+                let result = try streamText(model: languageModel, instructions: .text(system), prompt: input,
+                    output: output, providerOptions: options, settings: settings)
+                var collected = "", parser = JSONElementStream(), reason: FinishReason?
+                for try await part in result.fullStream {
+                    try Task.checkCancellation()
+                    switch part {
+                    case .textDelta(_, let delta, _):
+                        emitted = true; collected += delta
+                        try await onDelta?(delta)
+                        if let onElement {
+                            for element in try parser.append(delta) { try await onElement(element.key, element.data) }
+                        }
+                    case .error(let error):
+                        if error is APICallError || error is CancellationError { throw error }
+                        throw ImportError.service("The AI response stream was interrupted. Retry to continue; completed analysis items are kept.")
+                    case .abort: throw CancellationError()
+                    case .finish(let value, _, _): reason = value
+                    default: break
+                    }
+                }
+                try Task.checkCancellation()
+                guard let reason else { throw ImportError.invalidResponse }
+                text = collected; finish = reason
             } else {
-                if schema == .documentPieces, result.finishReason == .length {
+                let result = try await generateText(model: languageModel, instructions: .text(system), prompt: input,
+                    output: output, providerOptions: options, settings: settings)
+                text = result.text; finish = result.finishReason
+            }
+            if connectionTest {
+                guard finish == .stop || finish == .length else { throw ImportError.invalidResponse }
+            } else {
+                if schema == .documentPieces, finish == .length {
                     throw ImportError.service("AI cleanup was truncated. Use a shorter document; cleanup must fit one JSON-schema response with at most 32,768 output tokens.")
                 }
-                guard result.finishReason != .length, !result.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw ImportError.invalidResponse }
+                guard finish != .length, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw ImportError.invalidResponse }
             }
-            return result.text
+            return text
         }
-        do {
-            do { return try await request(jsonSchema) }
-            catch let failure as APICallError where schema != nil && schema != .documentPieces && Self.rejectedFormat(failure) { return try await request(nil) }
-        } catch let failure as APICallError {
-            // Provider bodies may echo input or credentials; keep them out of UI and test diagnostics.
-            throw ImportError.service("The AI provider could not complete the request (HTTP \(failure.statusCode ?? 0)). Check the model, thinking level, key, and provider settings.")
-        }
+        return try await withTaskCancellationHandler {
+            do {
+                do { return try await request(jsonSchema) }
+                catch let failure as APICallError where !emitted && schema != nil && schema != .documentPieces && Self.rejectedFormat(failure) { return try await request(nil) }
+            } catch let failure as APICallError {
+                // Provider bodies may echo input or credentials; keep them out of UI and test diagnostics.
+                throw ImportError.service("The AI provider could not complete the request (HTTP \(failure.statusCode ?? 0)). Check the model, thinking level, key, and provider settings.")
+            }
+        } onCancel: { cancellation.cancel() }
     }
-    public func cleanText(_ input: String) async throws -> [String] {
+    public func cleanText(_ input: String, onPiece: (@Sendable (String) async throws -> Void)? = nil) async throws -> [String] {
         _ = try TextImporter.paragraphs(input)
         try Task.checkCancellation()
         // shortcut: cap cleanup output at 32k tokens; negotiate model limits if longer documents are needed.
@@ -173,7 +213,13 @@ public struct AIClient: Sendable {
             The hard limit is 4000 Unicode characters per piece, with no whitespace-only pieces.
             Prefer complete sentences; split an oversized sentence at a word boundary.
             Return only JSON matching the schema: {"pieces":["first cleaned piece","next cleaned piece"]}.
-            """, input: input, schema: .documentPieces, maxTokens: max(12000, min(32768, input.unicodeScalars.count + 4096)))
+            """, input: input, schema: .documentPieces, maxTokens: max(12000, min(32768, input.unicodeScalars.count + 4096)),
+            onElement: onPiece.map { callback in { @Sendable key, data in
+                guard key == "pieces" else { return }
+                let piece = try JSONDecoder().decode(String.self, from: data)
+                try SpeechText.validatePieces([piece])
+                try await callback(piece)
+            } })
         guard let object = try JSONSerialization.jsonObject(with: Data(result.utf8)) as? [String: Any],
               Set(object.keys) == ["pieces"], let pieces = object["pieces"] as? [String] else { throw ImportError.invalidResponse }
         try SpeechText.validatePieces(pieces)
@@ -263,4 +309,11 @@ public struct AIClient: Sendable {
         return parameter.hasPrefix("response_format") || parameter.hasPrefix("text.format") || parameter.hasPrefix("output_config.format")
             || ["json_schema", "output_config.format", "responsejsonschema", "responseschema", "response_json_schema"].contains { failure.message.lowercased().contains($0) }
     }
+}
+
+private final class AIRequestCancellation: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = false
+    var isCancelled: Bool { lock.withLock { value } }
+    func cancel() { lock.withLock { value = true } }
 }

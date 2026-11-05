@@ -32,7 +32,7 @@ final class SpeechSpy {
     var audioTranscript: Transcript?; var speechTranscript: Transcript?; var error: String?
     let player = AVPlayer(); let speech = SpeechSpy(); var utterance: AVSpeechUtterance?
     var currentURL: URL?; var boundary: Any?; var playbackRequest = UUID(); var seeking = false; var speed: Float = 1
-    var generatedCalls = 0; var toggles = 0
+    var generatedCalls = 0; var toggles = 0; var generatedPlayback = false
     func activate() -> Bool { true }
     func stop() { isPlaying = false; transcriptID = nil; activeSegmentID = nil }
     func playGenerated(text: String, transcript: Transcript?, settings: SettingsStore, clip: Bool) { generatedCalls += 1 }
@@ -58,6 +58,11 @@ for state in ["preparing", "pending", "preparationFailed", "failed"] {
         precondition(player.toggles == 0 && player.speech.calls == 0 && player.generatedCalls == 0)
     }
 }
+let readyPartTranscript = Transcript()
+let readyPart = ClipPlayer()
+readyPart.toggleParagraph(segment, transcript: readyPartTranscript, settings: settings, readyAudio: URL(fileURLWithPath: "/tmp/ready-part.mp3"))
+precondition(readyPart.isPlaying && readyPart.generatedPlayback && readyPart.activeSegmentID == segment.id)
+precondition(readyPart.speech.calls == 0 && readyPart.generatedCalls == 0, "Ready paragraphs play immediately without duplicate paid synthesis")
 let pending = Transcript()
 for paragraph in [false, true] {
     let stale = ClipPlayer()

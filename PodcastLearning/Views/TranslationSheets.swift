@@ -139,7 +139,7 @@ struct SentenceSheet: View {
     }
     @MainActor private func explain() async {
         busy = true; error = nil; defer { busy = false }
-        do { explanation = try await AIAnalyzer(settings: settings).explain(sentence.text) }
+        do { explanation = ""; explanation = try await AIAnalyzer(settings: settings).explain(sentence.text) { explanation += $0 } }
         catch { self.error = error.localizedDescription }
     }
 }

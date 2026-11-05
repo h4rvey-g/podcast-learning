@@ -82,6 +82,7 @@ public struct SpeechSynthesizer: Sendable {
         public var duration: Double { ranges.last?.end ?? 0 }
     }
     public func generate(paragraphs: [String], directory: URL, to destination: URL,
+                         onParagraphReady: (@Sendable (Int, URL) async throws -> Void)? = nil,
                          progress: @escaping @Sendable (Int, Int) -> Void = { _, _ in }) async throws -> Result {
         let parts = paragraphs.map { SpeechText.chunks($0) }
         guard !parts.isEmpty, parts.allSatisfy({ !$0.isEmpty }) else { throw ImportError.emptyText }
@@ -104,7 +105,25 @@ public struct SpeechSynthesizer: Sendable {
                 }
             }
         }
+        var published = Set<Int>()
+        func publishReadyParagraphs() async throws {
+            guard let onParagraphReady else { return }
+            var offset = 0
+            for (index, count) in counts.enumerated() {
+                let paragraphFiles = Array(files[offset..<(offset + count)]); offset += count
+                guard !published.contains(index), paragraphFiles.allSatisfy({ FileManager.default.fileExists(atPath: $0.path) }) else { continue }
+                let file: URL
+                if paragraphFiles.count == 1 { file = paragraphFiles[0] }
+                else {
+                    file = directory.appendingPathComponent("ready-\(index).m4a")
+                    _ = try await AudioPreparation.joinAudio(paragraphFiles, to: file)
+                }
+                try await onParagraphReady(index, file)
+                published.insert(index)
+            }
+        }
         progress(completed, total)
+        try await publishReadyParagraphs()
         try await withThrowingTaskGroup(of: URL.self) { group in
             var next = 0
             func enqueue() {
@@ -114,6 +133,7 @@ public struct SpeechSynthesizer: Sendable {
             for _ in 0..<min(SpeechRateLimiter.maximum, jobs.count) { enqueue() }
             while let file = try await group.next() {
                 completed += occurrences[file] ?? 0; progress(completed, total)
+                try await publishReadyParagraphs()
                 if next < jobs.count { enqueue() }
             }
         }

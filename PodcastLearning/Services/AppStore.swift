@@ -16,6 +16,10 @@ import PodcastCore
     var synthesizing: Set<UUID> = []
     var synthesisProgress: [UUID: Double] = [:]
     var synthesisStatus: [UUID: String] = [:]
+    var cleanupPreview: [UUID: [String]] = [:]
+    var paragraphAudio: [UUID: URL] = [:]
+    var analysisProgress: [UUID: Double] = [:]
+    var processingPhase: [UUID: String] = [:]
     @ObservationIgnored private var synthesisTasks: [UUID: Task<Void, Never>] = [:]
     var transcribing: Set<UUID> = []
     var transcriptionProgress: [UUID: Double] = [:]
@@ -39,17 +43,23 @@ import PodcastCore
                 transcript.synthesisError = "Audio generation was interrupted. Completed parts are kept. Tap Retry Audio Generation."
             }
         }
+        // Audio parts may have been playing when the final file was saved in the previous run.
+        for transcript in try context.fetch(FetchDescriptor<Transcript>()) where transcript.synthesisState == "done" {
+            if let directory = try? AudioStore.workDirectory(transcript.id) { try? FileManager.default.removeItem(at: directory) }
+        }
         try context.save()
     }
     func save() { do { try context.save() } catch { self.error = "Could not save your changes: \(error.localizedDescription)" } }
     func removeTranscript(_ transcript: Transcript) throws {
         let id = transcript.id
+        for segment in transcript.orderedSegments { paragraphAudio[segment.id] = nil }
+        cleanupPreview[id] = nil; analysisProgress[id] = nil; processingPhase[id] = nil
         context.delete(transcript)
         do { try context.save() }
         catch { context.rollback(); throw error }
         synthesisTasks.removeValue(forKey: id)?.cancel()
         downloading.remove(id); transcribing.remove(id); synthesizing.remove(id); synthesisProgress[id] = nil; synthesisStatus[id] = nil
-        audioErrors[id] = nil; downloadProgress[id] = nil; transcriptionProgress[id] = nil; transcriptionStatus[id] = nil
+        audioErrors[id] = nil; downloadProgress[id] = nil; transcriptionProgress[id] = nil; transcriptionStatus[id] = nil; processingPhase[id] = nil
         // Transfers that finish later clean up again in their defers.
         removeMedia(id)
     }
@@ -89,16 +99,18 @@ import PodcastCore
               prepareDocument || !transcript.orderedSegments.isEmpty, synthesizing.insert(transcript.id).inserted else { return }
         let id = transcript.id
         defer {
-            synthesizing.remove(id); synthesisProgress[id] = nil; synthesisStatus[id] = nil
+            synthesizing.remove(id); synthesisProgress[id] = nil; synthesisStatus[id] = nil; cleanupPreview[id] = nil; processingPhase[id] = nil
             if transcript.modelContext == nil { removeMedia(id) }
         }
         transcript.synthesisState = prepareDocument ? "preparing" : "pending"; transcript.synthesisError = nil
+        for segment in transcript.orderedSegments { paragraphAudio[segment.id] = nil }
         do {
             try context.save()
             let service = settings.speechService
             let client = service == .openRouter ? try speechSynthesizer() : nil
             let directory = try AudioStore.workDirectory(id)
             if prepareDocument {
+                processingPhase[id] = "extract"
                 synthesisStatus[id] = "Extracting document text…"
                 let source = try DocumentTextImporter.sourceFile(id)
                 let extraction = Task.detached(priority: .userInitiated) { try DocumentTextImporter.extract(from: source) }
@@ -106,14 +118,20 @@ import PodcastCore
                 try Task.checkCancellation()
                 guard transcript.modelContext != nil else { return }
                 synthesisStatus[id] = "Cleaning and splitting document text with AI…"
-                let cleaned = try await AIAnalyzer(settings: settings).cleanText(text)
+                processingPhase[id] = "clean"; cleanupPreview[id] = []
+                let cleaned = try await AIAnalyzer(settings: settings).cleanText(text) { [weak self] piece in
+                    guard let self, transcript.modelContext != nil else { throw CancellationError() }
+                    self.cleanupPreview[id, default: []].append(piece)
+                    self.synthesisStatus[id] = "Cleaning text · \(self.cleanupPreview[id]?.count ?? 0) paragraphs ready"
+                }
                 try Task.checkCancellation()
                 guard transcript.modelContext != nil else { return }
                 try DocumentTextImporter.applyCleanedPieces(cleaned, to: transcript)
+                cleanupPreview[id] = nil; processingPhase[id] = "mark"
                 marker.mark(transcript, target: CEFR(rawValue: transcript.targetLevelOverride ?? "") ?? settings.level)
                 try context.save()
                 synthesisProgress[id] = nil; synthesisStatus[id] = nil
-                if settings.aiConsent { Task { await analyze(transcript) } }
+                if settings.aiConsent { transcript.analysisState = "pending"; Task { await analyze(transcript) } }
             }
             guard let client else {
                 transcript.synthesisState = "none"
@@ -122,10 +140,17 @@ import PodcastCore
                 return
             }
             let segments = transcript.orderedSegments
-            let result = try await client.generate(paragraphs: segments.map(\.text), directory: directory, to: AudioStore.bilibiliFile(id)) { [weak self] completed, total in
+            processingPhase[id] = "generate"
+            let publish: @MainActor @Sendable (Int, URL) throws -> Void = { [weak self] index, file in
+                guard let self, transcript.modelContext != nil else { throw CancellationError() }
+                self.paragraphAudio[segments[index].id] = file
+            }
+            let result = try await client.generate(paragraphs: segments.map(\.text), directory: directory, to: AudioStore.bilibiliFile(id),
+                onParagraphReady: { index, file in try await publish(index, file) }) { [weak self] completed, total in
                 Task { @MainActor in
                     guard let self, self.synthesizing.contains(id) else { return }
                     self.synthesisProgress[id] = Double(completed) / Double(total)
+                    self.processingPhase[id] = completed == total ? "join" : "generate"
                     self.synthesisStatus[id] = completed == total ? "Combining AI audio…" : "Generating AI audio · \(completed) of \(total) parts"
                 }
             }
@@ -133,7 +158,8 @@ import PodcastCore
             for (segment, range) in zip(segments, result.ranges) { segment.start = range.start; segment.end = range.end }
             transcript.audioDuration = result.duration; transcript.synthesisState = "done"
             try context.save()
-            try? FileManager.default.removeItem(at: directory)
+            // Keep playable parts until next launch; a paragraph may still be playing during the merge.
+            if let source = try? DocumentTextImporter.sourceFile(id) { try? FileManager.default.removeItem(at: source) }
         } catch {
             guard transcript.modelContext != nil else { return }
             transcript.synthesisState = transcript.synthesisState == "preparing" ? "preparationFailed" : "failed"
@@ -141,26 +167,40 @@ import PodcastCore
             save()
         }
     }
-    func importProgress(_ transcript: Transcript) -> (title: String, fraction: Double?)? {
-        let id = transcript.id
+    func importProgress(_ transcript: Transcript) -> ImportProgress? {
+        let id = transcript.id, phase = processingPhase[id]
+        let preparing = transcript.synthesisState == "preparing", generating = transcript.synthesisState == "pending"
+        let transcribing = transcript.transcriptionState == "pending", analyzing = transcript.analysisState == "pending"
+        guard preparing || generating || transcribing || analyzing || downloading.contains(id) else { return nil }
         if transcript.transcriptionState == "failed" || ["failed", "preparationFailed"].contains(transcript.synthesisState) { return nil }
-        if transcript.transcriptionState == "pending" {
-            let uploaded = transcriptionProgress[id]
-            let fraction = if let uploaded { uploaded < 1 ? uploaded : nil } else { downloadProgress[id] }
-            return (transcriptionStatus[id] ?? "Preparing transcription…", fraction)
+        var steps: [ImportProgress.Step] = []
+        let document = transcript.sourceURL == nil && transcript.remoteAudioURL == nil
+        if document {
+            steps.append(.init("extract", "Extract text", preparing && phase != "clean" ? .running : .done))
+            steps.append(.init("clean", "AI cleanup", preparing ? (phase == "clean" ? .running : .waiting) : .done))
+            steps.append(.init("mark", "Mark vocabulary", preparing ? .waiting : .done))
+            if settings.speechService == .openRouter || generating || transcript.synthesisState == "done" {
+                let joined = transcript.synthesisState == "done"
+                let allParts = phase == "join" || joined
+                steps.append(.init("generate", "Generate audio", allParts ? .done : generating ? .running : .waiting, fraction: synthesisProgress[id]))
+                steps.append(.init("join", "Combine audio", joined ? .done : phase == "join" ? .running : .waiting))
+            }
+        } else if transcribing || transcript.transcriptionState == "done" {
+            let done = transcript.transcriptionState == "done"
+            let position = ["download", "prepare", "upload", "transcribe"].firstIndex(of: phase ?? "download") ?? 0
+            let titles = ["Download audio", "Prepare audio", "Upload audio", "Transcribe audio"]
+            for (index, key) in ["download", "prepare", "upload", "transcribe"].enumerated() {
+                steps.append(.init(key, titles[index], done || index < position ? .done : index == position ? .running : .waiting,
+                    fraction: key == "download" ? downloadProgress[id] : key == "upload" ? transcriptionProgress[id] : nil))
+            }
+            steps.append(.init("mark", "Mark vocabulary", done ? .done : .waiting))
+        } else if downloading.contains(id) || AudioStore.localURL(id) != nil {
+            steps.append(.init("download", "Download audio", downloading.contains(id) ? .running : .done, fraction: downloadProgress[id]))
         }
-        if transcript.synthesisState == "preparing" {
-            return (synthesisStatus[id] ?? "Preparing document…", nil)
+        if settings.aiConsent || analyzing || transcript.analysisState == "aiDone" {
+            steps.append(.init("analyze", "AI vocabulary analysis", transcript.analysisState == "aiDone" ? .done : transcript.analysisState == "aiFailed" ? .failed : analyzing ? .running : .waiting, fraction: analysisProgress[id]))
         }
-        if transcript.synthesisState == "pending" {
-            let fraction = synthesisProgress[id]
-            return (synthesisStatus[id] ?? "Generating AI audio…", fraction == 1 ? nil : fraction)
-        }
-        if downloading.contains(id) {
-            return (transcript.remoteAudioURL == nil ? "Finding episode audio…" : "Downloading audio…", downloadProgress[id])
-        }
-        if transcript.analysisState == "pending" { return ("Finding key sentences…", nil) }
-        return nil
+        return ImportProgress(steps: steps)
     }
     func podcastPreview(_ input: String) async throws -> Transcript {
         let link = try EpisodeLink(input)
@@ -209,7 +249,7 @@ import PodcastCore
         let id = transcript.id
         downloadProgress[id] = nil; transcriptionProgress[id] = nil
         defer {
-            transcribing.remove(id); downloadProgress[id] = nil; transcriptionProgress[id] = nil; transcriptionStatus[id] = nil
+            transcribing.remove(id); downloadProgress[id] = nil; transcriptionProgress[id] = nil; transcriptionStatus[id] = nil; processingPhase[id] = nil
             if transcript.modelContext == nil { removeMedia(id) }
         }
         transcript.keepVideo = transcript.keepVideo && settings.keepBilibiliVideo
@@ -224,20 +264,24 @@ import PodcastCore
                 result = try JSONDecoder().decode(MAIResult.self, from: Data(contentsOf: resultFile))
             } else {
                 let client = try MAITranscriber(endpoint: settings.speechEndpoint, key: APIKey.read(account: "azureSpeech"), model: settings.speechModel)
+                processingPhase[id] = "download"
                 transcriptionStatus[id] = "Downloading audio…"
                 try await downloadBilibili(transcript)
                 guard transcript.modelContext != nil else { return }
                 let wav = directory.appendingPathComponent("audio.wav")
                 downloadProgress[id] = nil
+                processingPhase[id] = "prepare"
                 transcriptionStatus[id] = "Preparing audio…"
                 guard let source = AudioStore.localURL(id) else { throw ImportError.invalidResponse }
                 try await Task.detached(priority: .utility) { try AudioPreparation.wav(from: source, to: wav) }.value
                 guard transcript.modelContext != nil else { return }
                 guard settings.transcriptionConsent else { throw ImportError.service("Audio transcription was turned off. Your downloaded audio is kept.") }
+                processingPhase[id] = "upload"
                 transcriptionStatus[id] = "Uploading audio…"
                 result = try await client.transcribe(wav, resultFile: resultFile) { [weak self] fraction in
                     Task { @MainActor in
                         guard let self, self.transcribing.contains(id) else { return }
+                        self.processingPhase[id] = fraction < 1 ? "upload" : "transcribe"
                         self.transcriptionProgress[id] = fraction
                         self.transcriptionStatus[id] = fraction < 1 ? "Uploading audio…" : "Transcribing · Waiting for result…"
                     }
@@ -250,7 +294,7 @@ import PodcastCore
             try context.save()
             // Keep the result until the transcript is durably saved; cleanup never changes success.
             try? FileManager.default.removeItem(at: directory)
-            if settings.aiConsent { Task { await analyze(transcript) } }
+            if settings.aiConsent { transcript.analysisState = "pending"; Task { await analyze(transcript) } }
         } catch {
             guard transcript.modelContext != nil else { return }
             // A failed save must not leave unsaved segments that block applying the cached result.
@@ -296,15 +340,19 @@ import PodcastCore
         context.insert(transcript)
         marker.mark(transcript, target: CEFR(rawValue: transcript.targetLevelOverride ?? "") ?? settings.level)
         do { try context.save() } catch { context.delete(transcript); throw error }
-        if settings.aiConsent { Task { await analyze(transcript) } }
+        if settings.aiConsent { transcript.analysisState = "pending"; Task { await analyze(transcript) } }
     }
     func analyze(_ transcript: Transcript) async {
         guard transcript.modelContext != nil, !transcript.orderedSegments.isEmpty, analyzing.insert(transcript.id).inserted else { return }
         let id = transcript.id
-        defer { analyzing.remove(id) }
+        defer { analyzing.remove(id); analysisProgress[id] = nil }
         transcript.analysisState = "pending"; transcript.analysisError = nil; save()
         do {
-            try await AIAnalyzer(settings: settings).analyze(transcript)
+            try await AIAnalyzer(settings: settings).analyze(transcript) { [weak self] completed, total in
+                guard let self, transcript.modelContext != nil else { throw CancellationError() }
+                self.analysisProgress[id] = total > 0 ? Double(completed) / Double(total) : 0
+                try self.context.save()
+            }
             guard transcript.modelContext != nil else { return }
             transcript.analysisState = "aiDone"
         } catch {

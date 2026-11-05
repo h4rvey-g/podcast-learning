@@ -53,12 +53,16 @@ enum TextMatch { static func highlights(in text: String, items: [DictationItem])
     var practiceItems: [DictationItem] { activeItems }
     var showKeySentences = true
 }
+@Observable final class AppStore {
+    var cleanupPreview: [UUID: [String]] = [:]
+    var paragraphAudio: [UUID: URL] = [:]
+}
 @Observable final class SettingsStore {}
 @Observable final class ClipPlayer {
     var isPlaying = true; var position: Double = 1; var duration: Double = 0; var transcriptID: UUID?
     var segmentID: UUID?; var activeSegmentID: UUID?; var utterance: String?
 ${audio.slice(activeStart, activeEnd)}
-    func toggleParagraph(_ segment: Segment, transcript: Transcript, settings: SettingsStore) {}
+    func toggleParagraph(_ segment: Segment, transcript: Transcript, settings: SettingsStore, readyAudio: URL? = nil) {}
     func isWaitingForAudio(_ transcript: Transcript, settings: SettingsStore) -> Bool { false }
 }
 enum ReaderSelection { case word(String, Sentence), sentence(Sentence) }
@@ -92,6 +96,7 @@ ${buttonStart >= 0 ? reader.slice(buttonStart, buttonEnd) : ''}
 struct ReaderScrollProbe: View {
     let transcript: Transcript
     @Environment(ClipPlayer.self) private var player
+    @Environment(AppStore.self) private var store
     @Environment(SettingsStore.self) private var settings
     @Environment(\\.accentTheme) private var theme
     @State private var selection: ReaderSelection?
@@ -106,7 +111,7 @@ let player = ClipPlayer()
 let transcript = Transcript()
 player.transcriptID = transcript.id
 let renderer = ImageRenderer(content: ReaderScrollProbe(transcript: transcript)
-    .environment(player).environment(SettingsStore()).frame(width: 390, height: 800))
+    .environment(player).environment(SettingsStore()).environment(AppStore()).frame(width: 390, height: 800))
 renderer.scale = 1
 precondition(renderer.cgImage != nil, "Reader must render")
 let baseline = Counters.highlights

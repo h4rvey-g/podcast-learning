@@ -59,7 +59,7 @@ struct SettingsView: View {
             .onAppear { readKey() }
             .confirmationDialog("Delete downloaded media and document processing files? Saved text and word progress are kept. Unfinished document sessions will need the original file imported again.", isPresented: Binding(get: { deletingAudio != nil }, set: { if !$0 { deletingAudio = nil } }), titleVisibility: .visible) {
                 Button("Delete Media", role: .destructive) {
-                    if let transcript = deletingAudio { do { try AudioStore.delete(transcript.id); storageRevision += 1 } catch { store.error = error.localizedDescription } }
+                    if let transcript = deletingAudio { do { try AudioStore.delete(transcript.id); for segment in transcript.orderedSegments { store.paragraphAudio[segment.id] = nil }; storageRevision += 1 } catch { store.error = error.localizedDescription } }
                     deletingAudio = nil
                 }
                 Button("Cancel", role: .cancel) { deletingAudio = nil }

@@ -93,6 +93,16 @@ private final class SpeechProtocol: URLProtocol, @unchecked Sendable {
     }
 }
 
+private actor ReadyParagraphs {
+    var indexes: [Int] = []
+    func record(_ index: Int, file: URL, final: URL) throws {
+        #expect(FileManager.default.fileExists(atPath: file.path))
+        #expect(!FileManager.default.fileExists(atPath: final.path), "Each paragraph is playable before the final merge")
+        #expect(!(try Data(contentsOf: file)).isEmpty)
+        indexes.append(index)
+    }
+}
+
 @Suite(.serialized) struct SpeechSynthesisTests {
     private func session() -> URLSession {
         let config = URLSessionConfiguration.ephemeral; config.protocolClasses = [SpeechProtocol.self]
@@ -138,8 +148,12 @@ private final class SpeechProtocol: URLProtocol, @unchecked Sendable {
         var client = try SpeechSynthesizer(key: "key", session: session)
         client.limiter = SpeechRateLimiter()
         SpeechProtocol.stub.reset(delays: ["First paragraph.": 0.3, "Second paragraph.": 0.02, "Third paragraph.": 0.02])
+        let ready = ReadyParagraphs(), final = directory.appendingPathComponent("joined.m4a")
         let result = try await client.generate(paragraphs: ["First paragraph.", "Second paragraph.", "Third paragraph."],
-            directory: directory, to: directory.appendingPathComponent("joined.m4a"))
+            directory: directory, to: final, onParagraphReady: { index, file in try await ready.record(index, file: file, final: final) })
+        let readyIndexes = await ready.indexes
+        #expect(readyIndexes.count == 3)
+        #expect(Set(readyIndexes) == Set([0, 1, 2]))
         let activity = SpeechProtocol.stub.activity()
         #expect(activity.peak >= 2 && activity.peak <= SpeechRateLimiter.maximum)
         #expect(activity.completed.count == 3 && activity.completed.first != "First paragraph.")
