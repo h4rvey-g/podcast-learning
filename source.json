@@ -21,6 +21,14 @@
       "category": "Education",
       "versions": [
         {
+          "version": "1.3",
+          "date": "2026-11-05T04:38:35Z",
+          "localizedDescription": "PodLearn 1.3. Unsigned build; SideStore re-signs it with your Apple ID.",
+          "downloadURL": "https://wget.la/https://github.com/h4rvey-g/podcast-learning/releases/download/v1.3/PodLearn-1.3-unsigned.ipa",
+          "size": 10842141,
+          "minOSVersion": "18.0"
+        },
+        {
           "version": "1.2",
           "date": "2026-11-04T13:26:44Z",
           "localizedDescription": "PodLearn 1.2. Unsigned build; SideStore re-signs it with your Apple ID.",
@@ -37,10 +45,10 @@
           "minOSVersion": "18.0"
         }
       ],
-      "version": "1.2",
-      "versionDate": "2026-11-04T13:26:44Z",
-      "downloadURL": "https://wget.la/https://github.com/h4rvey-g/podcast-learning/releases/download/v1.2/PodLearn-1.2-unsigned.ipa",
-      "size": 10736624,
+      "version": "1.3",
+      "versionDate": "2026-11-05T04:38:35Z",
+      "downloadURL": "https://wget.la/https://github.com/h4rvey-g/podcast-learning/releases/download/v1.3/PodLearn-1.3-unsigned.ipa",
+      "size": 10842141,
       "minOSVersion": "18.0"
     }
   ],
