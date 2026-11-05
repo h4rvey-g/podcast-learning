@@ -13,6 +13,7 @@ import PodcastCore
     var aiAPI: String { didSet { defaults.set(aiAPI, forKey: "aiAPI") } }
     var thinking: String { didSet { defaults.set(thinking, forKey: "thinking") } }
     var speechModel: String { didSet { defaults.set(speechModel, forKey: "speechModel") } }
+    var speechService: SpeechService { didSet { defaults.set(speechService.rawValue, forKey: "speechService") } }
     var ttsModel: String { didSet { defaults.set(ttsModel, forKey: "ttsModel") } }
     var ttsVoice: String { didSet { defaults.set(ttsVoice, forKey: "ttsVoice") } }
     var voice: String { didSet { defaults.set(voice, forKey: "voice") } }
@@ -33,6 +34,9 @@ import PodcastCore
         aiAPI = defaults.string(forKey: "aiAPI") ?? "chat"
         thinking = defaults.string(forKey: "thinking") ?? "provider-default"
         speechModel = defaults.string(forKey: "speechModel") ?? "MAI-Transcribe-2"
+        // Preserve existing OpenRouter setups; new installations use on-device speech.
+        let hasTTS = defaults.string(forKey: "ttsModel") != nil || !((try? APIKey.read(account: "openRouterTTS")) ?? "").isEmpty
+        speechService = SpeechService(rawValue: defaults.string(forKey: "speechService") ?? "") ?? (hasTTS ? .openRouter : .apple)
         ttsModel = defaults.string(forKey: "ttsModel") ?? SpeechSynthesizer.defaultModel
         ttsVoice = defaults.string(forKey: "ttsVoice") ?? SpeechSynthesizer.defaultVoice
         voice = defaults.string(forKey: "voice") ?? "en-US"

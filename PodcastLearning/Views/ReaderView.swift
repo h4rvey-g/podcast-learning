@@ -92,10 +92,10 @@ struct ReaderView: View {
                         Button("Play Downloaded Video", systemImage: "video") { player.stop(); showVideo = true }
                     }
                     if transcript.sourceURL == nil && transcript.remoteAudioURL == nil && !transcript.orderedSegments.isEmpty {
-                        if AudioStore.localURL(transcript.id) == nil {
+                        if settings.speechService == .openRouter && AudioStore.localURL(transcript.id) == nil {
                             Button("Generate Audio", systemImage: "waveform") { confirmSynthesis = true }.disabled(store.synthesizing.contains(transcript.id))
                         }
-                        NavigationLink("Generated Audio Settings") { SynthesisSettingsView() }
+                        NavigationLink("Speech Settings") { SynthesisSettingsView() }
                     }
                     Button("Analyze with AI", systemImage: "sparkles") { Task { await store.analyze(transcript) } }.disabled(transcript.analysisState == "pending" || transcript.orderedSegments.isEmpty)
                     if (transcript.remoteAudioURL != nil || transcript.sourceURL != nil) && AudioStore.localURL(transcript.id) == nil {
@@ -171,7 +171,7 @@ struct ReaderView: View {
                 Text("Retry sends text to your configured providers and may incur charges.").font(.footnote).foregroundStyle(.secondary)
                 Button("Retry Document Processing", systemImage: "arrow.clockwise") { store.synthesize(transcript) }.frame(minHeight: 44)
                 NavigationLink("AI Settings") { SettingsView() }.frame(minHeight: 44)
-                NavigationLink("Generated Audio Settings") { SynthesisSettingsView() }.frame(minHeight: 44)
+                NavigationLink("Speech Settings") { SynthesisSettingsView() }.frame(minHeight: 44)
             }
         } else if transcript.synthesisState == "pending" {
             VStack(alignment: .leading, spacing: 8) {
@@ -184,7 +184,7 @@ struct ReaderView: View {
                 Label("Audio Generation Interrupted", systemImage: "exclamationmark.arrow.circlepath").font(.headline)
                 Text(transcript.synthesisError ?? "Completed parts are kept.").font(.footnote).foregroundStyle(.secondary)
                 Button("Retry Audio Generation", systemImage: "arrow.clockwise") { confirmSynthesis = true }.frame(minHeight: 44)
-                NavigationLink("Generated Audio Settings") { SynthesisSettingsView() }.frame(minHeight: 44)
+                NavigationLink("Speech Settings") { SynthesisSettingsView() }.frame(minHeight: 44)
             }
         } else if transcript.synthesisState == "done", AudioStore.localURL(transcript.id) != nil {
             Label("AI-generated audio · Saved for offline playback", systemImage: "waveform").font(.footnote).foregroundStyle(.secondary)

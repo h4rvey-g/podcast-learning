@@ -95,7 +95,8 @@ import PodcastCore
         transcript.synthesisState = prepareDocument ? "preparing" : "pending"; transcript.synthesisError = nil
         do {
             try context.save()
-            let client = try speechSynthesizer()
+            let service = settings.speechService
+            let client = service == .openRouter ? try speechSynthesizer() : nil
             let directory = try AudioStore.workDirectory(id)
             if prepareDocument {
                 synthesisStatus[id] = "Extracting document text…"
@@ -113,6 +114,12 @@ import PodcastCore
                 try context.save()
                 synthesisProgress[id] = nil; synthesisStatus[id] = nil
                 if settings.aiConsent { Task { await analyze(transcript) } }
+            }
+            guard let client else {
+                transcript.synthesisState = "none"
+                try context.save()
+                if let source = try? DocumentTextImporter.sourceFile(id) { try? FileManager.default.removeItem(at: source) }
+                return
             }
             let segments = transcript.orderedSegments
             let result = try await client.generate(paragraphs: segments.map(\.text), directory: directory, to: AudioStore.bilibiliFile(id)) { [weak self] completed, total in

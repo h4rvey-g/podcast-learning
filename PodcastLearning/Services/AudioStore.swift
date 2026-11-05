@@ -24,6 +24,10 @@ import PodcastCore
     private var currentURL: URL?
     private var playbackRequest = UUID()
     private var seeking = false
+    private var synthesisTask: Task<Void, Never>?
+    private let speechCache = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    private var generatedRanges: [(UUID, PlaybackRange)] = []
+    private var generatedPlayback = false
     override init() {
         super.init(); speech.delegate = self
         periodic = player.addPeriodicTimeObserver(forInterval: CMTime(seconds: 0.1, preferredTimescale: 600), queue: .main) { [weak self] _ in
@@ -36,6 +40,10 @@ import PodcastCore
                 let total = self.player.currentItem?.duration.seconds ?? 0
                 let newDuration = total.isFinite ? total : 0
                 if self.duration != newDuration { self.duration = newDuration }
+                if self.generatedPlayback {
+                    self.speechProgress = newDuration > 0 ? min(1, newPosition / newDuration) : 0
+                    if let id = self.generatedRanges.first(where: { newPosition >= $0.1.start && newPosition < $0.1.end })?.0 { self.activeSegmentID = id }
+                }
                 if self.segmentID == nil, let transcript = self.audioTranscript {
                     let id = ClipPlayer.segmentID(at: newPosition, in: transcript)
                     if self.activeSegmentID != id { self.activeSegmentID = id }
@@ -55,6 +63,8 @@ import PodcastCore
         notifications.append(center.addObserver(forName: .AVPlayerItemDidPlayToEndTime, object: nil, queue: .main) { [weak self] _ in Task { @MainActor in self?.stop() } })
     }
     isolated deinit {
+        synthesisTask?.cancel()
+        try? FileManager.default.removeItem(at: speechCache)
         if let periodic { player.removeTimeObserver(periodic) }
         if let boundary { player.removeTimeObserver(boundary) }
         notifications.forEach(NotificationCenter.default.removeObserver)
@@ -89,6 +99,8 @@ import PodcastCore
                     if self.isPlaying { self.player.playImmediately(atRate: self.speed) }
                 }
             }
+        } else if settings.speechService == .openRouter && !["preparing", "pending"].contains(transcript?.synthesisState ?? "") {
+            playGenerated(text: text, transcript: transcript, settings: settings, clip: clip)
         } else {
             let utterance = AVSpeechUtterance(string: text)
             utterance.voice = settings.speechVoice
@@ -96,6 +108,35 @@ import PodcastCore
             audioTranscript = nil
             activeSegmentID = segment?.id
             utterance.rate = Float(settings.rate); speech.speak(utterance); isPlaying = true
+        }
+    }
+    private func playGenerated(text: String, transcript: Transcript?, settings: SettingsStore, clip: Bool) {
+        let request = playbackRequest, directory = speechCache
+        let model = settings.ttsModel, voice = settings.ttsVoice
+        let segments = clip ? [] : transcript?.orderedSegments ?? []
+        let paragraphs = segments.isEmpty ? [text] : segments.map(\.text)
+        let ids = segments.map(\.id)
+        player.replaceCurrentItem(with: nil); currentURL = nil; position = 0; duration = 0
+        error = nil; isPlaying = true
+        synthesisTask = Task { [weak self] in
+            do {
+                let client = try SpeechSynthesizer(key: APIKey.read(account: "openRouterTTS"), model: model, voice: voice)
+                try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+                let output = directory.appendingPathComponent("playback.m4a")
+                let result = try await client.generate(paragraphs: paragraphs, directory: directory, to: output)
+                try Task.checkCancellation()
+                guard let self, self.playbackRequest == request else { return }
+                self.generatedPlayback = true
+                self.generatedRanges = Array(zip(ids, result.ranges))
+                self.currentURL = output; self.duration = result.duration
+                self.player.replaceCurrentItem(with: AVPlayerItem(url: output))
+                self.synthesisTask = nil
+                self.player.playImmediately(atRate: self.speed)
+            } catch {
+                guard let self, self.playbackRequest == request else { return }
+                self.synthesisTask = nil; self.isPlaying = false
+                if !Task.isCancelled { self.error = error.localizedDescription }
+            }
         }
     }
     private static func segmentID(at time: Double, in transcript: Transcript) -> UUID? {
@@ -118,6 +159,7 @@ import PodcastCore
         else { play(text: segment.text, segment: segment, transcript: transcript, settings: settings) }
     }
     private func toggleCurrent() {
+        if synthesisTask != nil { stop(); return }
         if isPlaying {
             player.pause()
             if speech.isSpeaking { speech.pauseSpeaking(at: .immediate) }
@@ -130,7 +172,7 @@ import PodcastCore
     }
     func progress(in segment: Segment?) -> Double {
         guard let segment, segmentID == segment.id else { return 0 }
-        if utterance != nil { return speechProgress }
+        if utterance != nil || generatedPlayback { return speechProgress }
         guard let range = PlaybackRange(start: segment.start ?? -1, end: segment.end ?? 0) else { return 0 }
         return range.fraction(at: position)
     }
@@ -148,6 +190,7 @@ import PodcastCore
     func changeSpeed() { speed = speed >= 1.5 ? 0.75 : speed + 0.25; if isPlaying { player.rate = speed } }
     func stop() {
         playbackRequest = UUID(); seeking = false
+        synthesisTask?.cancel(); synthesisTask = nil; generatedRanges = []; generatedPlayback = false
         player.pause(); utterance = nil; speechTranscript = nil; speech.stopSpeaking(at: .immediate); isPlaying = false
         segmentID = nil; activeSegmentID = nil; audioTranscript = nil; transcriptID = nil; speechProgress = 0
         if let boundary { player.removeTimeObserver(boundary); self.boundary = nil }

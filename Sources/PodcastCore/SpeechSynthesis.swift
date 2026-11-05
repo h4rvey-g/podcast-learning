@@ -42,8 +42,8 @@ public struct SpeechSynthesizer: Sendable {
         self.model = model.trimmingCharacters(in: .whitespacesAndNewlines)
         self.voice = voice.trimmingCharacters(in: .whitespacesAndNewlines)
         self.session = session
-        guard !self.key.isEmpty else { throw ImportError.service("Save an OpenRouter key in Generated Audio settings first.") }
-        guard !self.model.isEmpty, !self.voice.isEmpty else { throw ImportError.service("Choose a TTS model and a supported voice in Generated Audio settings.") }
+        guard !self.key.isEmpty else { throw ImportError.service("Save an OpenRouter key in Speech settings first.") }
+        guard !self.model.isEmpty, !self.voice.isEmpty else { throw ImportError.service("Choose a TTS model and a supported voice in Speech settings.") }
     }
     public func synthesize(_ text: String, to destination: URL) async throws {
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw ImportError.emptyText }

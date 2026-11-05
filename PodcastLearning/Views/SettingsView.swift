@@ -1,6 +1,5 @@
 import SwiftUI
 import SwiftData
-import AVFoundation
 import PodcastCore
 import PodcastAI
 
@@ -15,7 +14,6 @@ struct SettingsView: View {
     @State private var deletingAudio: Transcript?
     @State private var storageRevision = 0
     private var downloaded: [Transcript] { transcripts.filter { AudioStore.size($0.id) > 0 } }
-    private var voices: [AVSpeechSynthesisVoice] { AVSpeechSynthesisVoice.speechVoices().filter { $0.language.hasPrefix("en-") }.sorted { $0.name < $1.name } }
     var body: some View {
         @Bindable var settings = settings
         Form {
@@ -32,7 +30,7 @@ struct SettingsView: View {
                 Picker(selection: $settings.targetLevel) { ForEach(CEFR.allCases, id: \.rawValue) { Text($0.rawValue).tag($0.rawValue) } } label: {
                     Label { Text("Target Level") } icon: { SettingsIcon(symbol: "gauge.with.dots.needle.50percent") }
                 }.pickerStyle(.navigationLink)
-            } header: { Text("Learning") } footer: { Text("Words at or above this level are marked. Each transcript can override it. Changes apply to new imports; use the reader’s level menu for existing transcripts.") }
+            } header: { Text("Learning") }
             Section {
                 NavigationLink { providerForm } label: { row("Provider", value: settings.baseURL, symbol: "server.rack", color: .indigo) }
                 NavigationLink { ModelSettingsView() } label: { row("Model", value: settings.model, symbol: "cpu", color: .indigo) }
@@ -43,22 +41,13 @@ struct SettingsView: View {
                     HStack { SettingsIcon(symbol: "cable.connector", color: .cyan); Text("Test Connection"); Spacer(); if testing { ProgressView() } }
                 }.disabled(testing)
                 if !testStatus.isEmpty { Text(testStatus).font(.footnote).foregroundStyle(.secondary) }
-            } header: { Text("AI") } footer: { Text(settings.aiConsent ? "AI is enabled. Transcripts are sent to your provider; charges may apply." : "AI is off. Enable it in Provider to generate explanations and word details.") }
+            } header: { Text("AI") }
             Section {
                 NavigationLink { TranscriptionSettingsView() } label: { row("Audio Transcription", value: settings.transcriptionConsent ? "MAI-Transcribe-2" : "Off", symbol: "waveform.badge.mic", color: .indigo) }
                 Toggle("Keep Bilibili Video", isOn: $settings.keepBilibiliVideo)
-            } header: { Text("Bilibili Imports") } footer: { Text("Audio only by default. Keep Video saves a local video with sound for new imports; only audio is uploaded for transcription. Video uses more storage and data. Turning this off also skips video when retrying an interrupted transcription.") }
-            Section("Speech") {
-                NavigationLink { SynthesisSettingsView() } label: { row("Generated Audio", value: settings.ttsModel, symbol: "waveform", color: .orange) }
-                Picker(selection: Binding(get: { settings.speechVoice?.identifier ?? settings.voice }, set: { settings.voice = $0 })) {
-                    ForEach(voices, id: \.identifier) { voice in Text("\(voice.name) (\(voice.language == "en-GB" ? "UK" : String(voice.language.dropFirst(3))))").tag(voice.identifier) }
-                } label: { Label { Text("Voice") } icon: { SettingsIcon(symbol: "waveform", color: .orange) } }.pickerStyle(.navigationLink)
-                NavigationLink {
-                    Form {
-                        Text("Speaking Rate · \(settings.rate / Double(AVSpeechUtteranceDefaultSpeechRate), format: .number.precision(.fractionLength(1)))×")
-                        Slider(value: $settings.rate, in: 0.25...0.6, step: 0.025).accessibilityLabel("Speaking Rate")
-                    }.navigationTitle("Speaking Rate")
-                } label: { row("Speaking Rate", value: String(format: "%.1f×", settings.rate / Double(AVSpeechUtteranceDefaultSpeechRate)), symbol: "speedometer", color: .orange) }
+            } header: { Text("Bilibili Imports") }
+            Section {
+                NavigationLink { SynthesisSettingsView() } label: { row("Speech", value: settings.speechService.label, symbol: "waveform", color: .orange) }
             }
             Section("Storage and About") {
                 NavigationLink { audioForm } label: {
@@ -178,7 +167,7 @@ private struct ModelSettingsView: View {
                     if !settings.customModels.contains(id) { settings.customModels.append(id) }
                     settings.model = id; customModel = ""
                 }.disabled(customID.isEmpty)
-            } header: { Text("Custom Model") } footer: { Text("Enter the exact model ID from your provider, even if it isn't listed below.") }
+            } header: { Text("Custom Model") }
             if !settings.customModels.isEmpty {
                 Section("Custom Models") {
                     ForEach(settings.customModels, id: \.self) { model in modelRow(model) }
@@ -190,7 +179,7 @@ private struct ModelSettingsView: View {
                 if !loading && error.isEmpty && models.isEmpty { Text("No models returned. You can still add a custom model.").foregroundStyle(.secondary) }
                 ForEach(models, id: \.self) { model in modelRow(model) }
                 Button("Refresh Models", systemImage: "arrow.clockwise") { refresh += 1 }.disabled(loading)
-            } header: { Text("Available Models") } footer: { Text("Loaded automatically from your provider using the saved API key. Listing a model doesn't guarantee it supports the selected API or thinking level.") }
+            } header: { Text("Available Models") }
         }.navigationTitle("Model")
             .task(id: "\(settings.aiAPI)|\(settings.baseURL)|\(refresh)") { await loadModels() }
     }

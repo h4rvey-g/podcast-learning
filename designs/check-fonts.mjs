@@ -102,7 +102,36 @@ try {
     assert.equal(wave.bars, 28, `${wave.name}: waveform must fill the audio card`)
     assert.equal(wave.overlap, false, `${wave.name}: taller audio card must not overlap the paragraph`)
   }
-  console.log(`PASS: 8 local font faces; ${samples.length} visible text samples; centered row/segment; ${before.length} text layers unchanged after save/reopen; 8 unnumbered inline input states without boxes, overlaps or clipping; 10 seekable waveform states.`)
+  const speech = JSON.parse(op('eval', design, '-c', `
+    const page=figma.root.children.find(p=>p.name==='Speech');
+    const settings=figma.root.children.flatMap(p=>p.children.filter(f=>/^(11 |17 |21 )/.test(f.name)));
+    const layouts=[];
+    for(const f of [...settings,...(page?.children??[])]) {
+      for(const n of f.findAll(n=>n.type==='FRAME'&&n.layoutMode==='VERTICAL')) {
+        const children=n.children.filter(c=>c.layoutPositioning!=='ABSOLUTE');
+        for(let i=1;i<children.length;i++) if(children[i].y<children[i-1].y+children[i-1].height-0.1) layouts.push(f.name+'/'+n.name);
+      }
+    }
+    ({
+      settings:settings.map(f=>({name:f.name,speech:f.findAll(n=>n.type==='TEXT'&&n.characters==='Speech').length,legacy:f.findAll(n=>n.type==='TEXT'&&/^(Voice|Speaking Rate)$/.test(n.characters)).length})),
+      screens:page?.children.map(f=>({name:f.name,width:f.width,height:f.height})),
+      models:page?.children.filter(f=>f.name.startsWith('27 ')).map(f=>f.findAll(n=>n.name.startsWith('Model eleven-')).length),
+      voices:page?.children.filter(f=>f.name.startsWith('28 ')).map(f=>({rows:f.findAll(n=>/^Voice [a-z]+/.test(n.name)).length,selected:f.findAll(n=>n.name==='Selected voice checkmark'&&n.height===18).length,buttons:f.findAll(n=>/^(Play|Stop) [A-Z][a-z]+ Sample$/.test(n.name)&&n.width===44&&n.height===44).length})),
+      notes:figma.root.children.flatMap(p=>p.children.filter(f=>/^(11 |17 |18 |21 |22 |25 |26 |27 |28 )/.test(f.name))).flatMap(f=>f.findAll(n=>n.type==='TEXT'&&/^Words at or above|^Audio only by default|^Thinking effort controls|^Speech uses its own|^Provider Default leaves|^Higher effort may|^Audio is sent to Azure|^A lost response may/.test(n.characters)).map(n=>n.characters)),
+      layouts
+    })`, '--json'))
+  assert.equal(speech.settings.length, 6)
+  for (const state of speech.settings) {
+    assert.equal(state.speech, 1, `${state.name}: exactly one Speech navigation row`)
+    assert.equal(state.legacy, 0, `${state.name}: voice and rate belong inside Speech`)
+  }
+  assert.equal(speech.screens.length, 8, 'Four Speech states in both appearances')
+  assert.ok(speech.screens.every(s => s.width === 393 && s.height === 852))
+  assert.deepEqual(speech.models, [9, 9])
+  assert.ok(speech.voices.every(s => s.rows === 21 && s.buttons === 21 && s.selected === 1))
+  assert.deepEqual(speech.notes, [], 'No explanatory settings footnotes')
+  assert.deepEqual(speech.layouts, [], 'Settings and speech rows must not overlap')
+  console.log(`PASS: 8 local font faces; ${samples.length} visible text samples; centered row/segment; ${before.length} text layers unchanged after save/reopen; 8 unnumbered inline input states; 10 seekable waveforms; 8 Speech states, single-row navigation, 44pt sample controls, no footnotes or overlapping rows.`)
 } finally {
   rmSync(dir, { recursive: true, force: true })
 }
