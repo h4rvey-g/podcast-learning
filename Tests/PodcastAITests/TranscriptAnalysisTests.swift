@@ -69,6 +69,32 @@ private actor AnalysisProvider {
     #expect(result.glosses.count == transcript.activeItems.count)
 }
 
+@MainActor @Test(arguments: CEFR.allCases.map(\.rawValue))
+func analysisPromptUsesChosenLevelAndSelectivePhraseCriteria(targetLevel: String) async throws {
+    let transcript = TextImporter.makeTranscript(title: "Prompt criteria", paragraphs: (0..<2).map {
+        "Paragraph \($0). " + String(repeating: "word ", count: 700)
+    })
+    let provider = AnalysisProvider()
+    let client = try AIClient(baseURL: "https://provider.example/v1", model: "test", key: "test-key", fetch: { request in
+        let body = try #require(JSONSerialization.jsonObject(with: request.httpBody!) as? [String: Any])
+        let messages = try #require(body["messages"] as? [[String: Any]])
+        let system = try #require(messages.first?["content"] as? String)
+        #expect(system.contains("The learner's chosen CEFR target level is \(targetLevel)."))
+        #expect(system.contains("at or above this level"))
+        #expect(system.contains("genuinely common idioms, standard collocations"))
+        #expect(system.contains("clear learning value at the chosen target level"))
+        #expect(system.contains("Do not flag arbitrary word combinations"))
+        #expect(system.contains("select the word alone if appropriate"))
+        #expect(system.contains("When in doubt, omit the multi-word item"))
+        let text = try #require(messages.last?["content"] as? String)
+        let input = try #require(JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any])
+        #expect(input["targetLevel"] as? String == targetLevel)
+        return try await provider.fetch(request)
+    })
+    _ = try await client.analyze(TranscriptAnalysisInput(transcript: transcript, targetLevel: targetLevel))
+    #expect(await provider.metrics().calls == 2)
+}
+
 @MainActor @Test func repeatedAnalysisDoesNotRegenerateSavedDefinitions() async throws {
     let transcript = TextImporter.makeTranscript(title: "Saved definitions", paragraphs: ["Music keeps time."])
     let complete = DictationItem(text: "Music", key: "music", sentence: transcript.sentences[0])
