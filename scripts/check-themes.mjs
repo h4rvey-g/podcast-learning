@@ -10,6 +10,7 @@ const theme = read('PodcastLearning/AccentTheme.swift')
 // These unrelated core defaults aren't exercised by this settings-only probe.
 const settings = read('PodcastLearning/Services/SettingsStore.swift').replace('import PodcastCore', `
 enum CEFR: String { case b2 = "B2" }
+enum SpeechService: String { case apple, openRouter }
 enum SpeechSynthesizer { static let defaultModel = "unused", defaultVoice = "unused" }
 `)
 const dir = mkdtempSync(join(tmpdir(), 'podcast-themes-'))

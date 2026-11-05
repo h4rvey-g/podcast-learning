@@ -31,8 +31,15 @@ public struct PodTextResponse: Decodable, Sendable {
         public let endSeconds: Double?
         public let text: String
     }
+    fileprivate var failureReason: String? {
+        guard let message = error?.trimmingCharacters(in: .whitespacesAndNewlines), !message.isEmpty else { return nil }
+        if message.localizedCaseInsensitiveContains("Apple Media Token has expired") {
+            return "Apple Podcasts access has expired on PodText. PodText needs to restore its service. Try again later or import a transcript file."
+        }
+        return message
+    }
     @MainActor public func transcript() throws -> Transcript {
-        guard success, let data else { throw ImportError.service(error ?? "No transcript was found. Try importing text instead.") }
+        guard success, let data else { throw ImportError.service("PodText: \(failureReason ?? "No transcript was found. Try importing text instead.")") }
         guard !data.segments.isEmpty else { throw ImportError.emptyText }
         let transcript = Transcript(title: data.title, author: data.author)
         transcript.episodeID = data.id; transcript.coverURL = data.cover
@@ -69,7 +76,15 @@ public struct PodTextClient {
         request.httpMethod = "POST"; request.timeoutInterval = 120
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONEncoder().encode(["url": link.url.absoluteString, "uid": uid])
-        return try JSONDecoder().decode(PodTextResponse.self, from: await HTTP.data(for: request, session: session))
+        let (data, response) = try await session.data(for: request)
+        guard let response = response as? HTTPURLResponse else { throw ImportError.invalidResponse }
+        guard data.count <= 25_000_000 else { throw ImportError.tooLarge }
+        guard (200..<300).contains(response.statusCode) else {
+            let failure = try? JSONDecoder().decode(PodTextResponse.self, from: data)
+            let reason = failure?.success == false ? failure?.failureReason : nil
+            throw ImportError.service("PodText (HTTP \(response.statusCode)): \(reason ?? "The transcript service is unavailable. Try again later or import a transcript file.")")
+        }
+        return try JSONDecoder().decode(PodTextResponse.self, from: data)
     }
 }
 
@@ -125,6 +140,42 @@ public struct EpisodeAudio: Sendable {
 }
 
 public enum AudioResolver {
+    @MainActor public static func preview(_ link: EpisodeLink, session: URLSession = .shared) async throws -> Transcript {
+        let data = try await HTTP.data(for: URLRequest(url: link.url), session: session)
+        guard let html = String(data: data, encoding: .utf8) else { throw ImportError.invalidResponse }
+        // shortcut: reads Apple's public episode payload; update this parser if its page format changes.
+        let pattern = #"<script\b[^>]*\bid\s*=\s*["']serialized-server-data["'][^>]*>([\s\S]*?)</script\s*>"#
+        let regex = try NSRegularExpression(pattern: pattern, options: .caseInsensitive)
+        guard let match = regex.firstMatch(in: html, range: NSRange(html.startIndex..., in: html)),
+              let range = Range(match.range(at: 1), in: html) else { throw ImportError.invalidResponse }
+        let page = try JSONSerialization.jsonObject(with: Data(html[range].utf8))
+        func episodeOffer(in value: Any) -> [String: Any]? {
+            if let object = value as? [String: Any] {
+                if object["contentId"] as? String == link.episodeID,
+                   let show = object["showOffer"] as? [String: Any], show["adamId"] as? String == link.showID,
+                   object["priceType"] as? String == "STDQ", object["streamUrl"] is String { return object }
+                for child in object.values { if let offer = episodeOffer(in: child) { return offer } }
+            } else if let array = value as? [Any] {
+                for child in array { if let offer = episodeOffer(in: child) { return offer } }
+            }
+            return nil
+        }
+        guard let offer = episodeOffer(in: page), let title = offer["title"] as? String,
+              !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              let value = offer["streamUrl"] as? String, let audio = URL(string: value),
+              ["https", "http"].contains(audio.scheme), audio.host != nil, audio.user == nil, audio.password == nil else {
+            throw ImportError.service("No public episode audio was found on Apple Podcasts. Check the episode link or import a transcript file.")
+        }
+        let show = offer["showOffer"] as? [String: Any]
+        let transcript = Transcript(title: title, author: show?["title"] as? String ?? "")
+        transcript.episodeID = link.episodeID; transcript.sourceURL = link.url.absoluteString
+        transcript.remoteAudioURL = audio.absoluteString
+        if let duration = offer["duration"] as? Double, duration.isFinite, duration > 0 { transcript.audioDuration = duration }
+        let artwork = (offer["episodeArtwork"] as? [String: Any]) ?? (offer["artwork"] as? [String: Any])
+        transcript.coverURL = (artwork?["template"] as? String)?.replacingOccurrences(of: "{w}", with: "600")
+            .replacingOccurrences(of: "{h}", with: "600").replacingOccurrences(of: "{f}", with: "jpg")
+        return transcript
+    }
     public static func normalizedTitle(_ title: String) -> String {
         title.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: Locale(identifier: "en_US"))
             .components(separatedBy: CharacterSet.alphanumerics.inverted).filter { !$0.isEmpty }.joined(separator: " ")

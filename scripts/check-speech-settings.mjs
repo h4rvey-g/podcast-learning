@@ -40,6 +40,13 @@ let defaults = UserDefaults(suiteName: suite)!
 defer { defaults.removePersistentDomain(forName: suite) }
 let fresh = SettingsStore(defaults: defaults)
 precondition(fresh.speechService == .apple)
+precondition(fresh.podcastTranscription == .podText)
+fresh.podcastTranscription = .stt
+precondition(SettingsStore(defaults: defaults).podcastTranscription == .stt)
+fresh.podcastTranscription = .podText
+precondition(SettingsStore(defaults: defaults).podcastTranscription == .podText)
+defaults.set("unknown", forKey: "podcastTranscription")
+precondition(SettingsStore(defaults: defaults).podcastTranscription == .podText)
 fresh.voice = "en-GB"; fresh.rate = 0.4
 fresh.ttsVoice = "sarah"; fresh.speechService = .openRouter
 let reloaded = SettingsStore(defaults: defaults)
@@ -56,7 +63,7 @@ APIKey.key = "fake-key"
 precondition(SettingsStore(defaults: defaults).speechService == .openRouter)
 defaults.set("apple", forKey: "speechService")
 precondition(SettingsStore(defaults: defaults).speechService == .apple, "An explicit choice overrides migration")
-print("PASS: speech persistence, existing-key/model migration, single settings row, no footers, and routing guards")
+print("PASS: speech and podcast-transcription persistence/defaults, existing-key/model migration, single settings row, no footers, and routing guards")
 `)
   process.stdout.write(execFileSync('swift', [file], { encoding: 'utf8' }))
 } finally {

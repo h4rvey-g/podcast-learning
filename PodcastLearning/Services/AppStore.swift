@@ -204,6 +204,7 @@ import PodcastCore
     }
     func podcastPreview(_ input: String) async throws -> Transcript {
         let link = try EpisodeLink(input)
+        if settings.podcastTranscription == .stt { return try await AudioResolver.preview(link) }
         let response = try await PodTextClient().fetch(link, uid: settings.uid)
         let transcript = try response.transcript()
         transcript.sourceURL = link.url.absoluteString
@@ -213,12 +214,26 @@ import PodcastCore
         let link = try EpisodeLink(input)
         let episodeID = link.episodeID
         if let existing = try context.fetch(FetchDescriptor<Transcript>(predicate: #Predicate { $0.episodeID == episodeID })).first { return existing }
+        let usesSTT = settings.podcastTranscription == .stt
+        if usesSTT {
+            guard settings.transcriptionConsent else { throw ImportError.service("Enable Audio Transcription in Settings before importing podcasts with STT.") }
+            _ = try MAITranscriber(endpoint: settings.speechEndpoint, key: APIKey.read(account: "azureSpeech"), model: settings.speechModel)
+        }
         let transcript: Transcript
-        if let preview, preview.episodeID == episodeID, preview.sourceURL == link.url.absoluteString { transcript = preview }
+        if let preview, preview.episodeID == episodeID, preview.sourceURL == link.url.absoluteString,
+           preview.orderedSegments.isEmpty == usesSTT { transcript = preview }
         else { transcript = try await podcastPreview(input) }
+        if let existing = try context.fetch(FetchDescriptor<Transcript>(predicate: #Predicate { $0.episodeID == episodeID })).first { return existing }
         transcript.targetLevelOverride = level
-        try insert(transcript)
-        Task { await downloadAudio(transcript) }
+        if usesSTT {
+            transcript.transcriptionState = "pending"
+            context.insert(transcript)
+            do { try context.save() } catch { context.delete(transcript); throw error }
+            Task { await transcribe(transcript) }
+        } else {
+            try insert(transcript)
+            Task { await downloadAudio(transcript) }
+        }
         return transcript
     }
     func bilibiliPreview(_ input: String) async throws -> Transcript {
@@ -266,7 +281,8 @@ import PodcastCore
                 let client = try MAITranscriber(endpoint: settings.speechEndpoint, key: APIKey.read(account: "azureSpeech"), model: settings.speechModel)
                 processingPhase[id] = "download"
                 transcriptionStatus[id] = "Downloading audio…"
-                try await downloadBilibili(transcript)
+                if let source = transcript.sourceURL, (try? BilibiliLink(source)) != nil { try await downloadBilibili(transcript) }
+                else { try await downloadPodcastAudio(transcript) }
                 guard transcript.modelContext != nil else { return }
                 let wav = directory.appendingPathComponent("audio.wav")
                 downloadProgress[id] = nil
@@ -370,26 +386,29 @@ import PodcastCore
             if transcript.modelContext == nil { removeMedia(id) }
         }
         do {
-            if let source = transcript.sourceURL, (try? BilibiliLink(source)) != nil {
-                try await downloadBilibili(transcript)
-                return
-            }
-            if transcript.remoteAudioURL == nil {
-                guard let source = transcript.sourceURL,
-                      let remote = try await AudioResolver.resolve(EpisodeLink(source), title: transcript.title) else {
-                    throw ImportError.service("No episode audio was found. You can still use text to speech.")
-                }
-                guard transcript.modelContext != nil else { return }
-                transcript.remoteAudioURL = remote.url.absoluteString; transcript.audioDuration = remote.duration; save()
-            }
-            guard let value = transcript.remoteAudioURL, let url = URL(string: value) else { throw ImportError.invalidURL }
-            try await AudioStore.download(url, id: id) { [weak self] fraction in
-                Task { @MainActor in
-                    guard let self, self.downloading.contains(id) else { return }
-                    self.downloadProgress[id] = fraction
-                }
-            }
+            if let source = transcript.sourceURL, (try? BilibiliLink(source)) != nil { try await downloadBilibili(transcript) }
+            else { try await downloadPodcastAudio(transcript) }
         } catch { if transcript.modelContext != nil { audioErrors[id] = error.localizedDescription } }
+    }
+    private func downloadPodcastAudio(_ transcript: Transcript) async throws {
+        let id = transcript.id
+        guard AudioStore.localURL(id) == nil else { return }
+        if transcript.remoteAudioURL == nil {
+            guard let source = transcript.sourceURL,
+                  let remote = try await AudioResolver.resolve(EpisodeLink(source), title: transcript.title) else {
+                throw ImportError.service("No episode audio was found. You can still use text to speech.")
+            }
+            guard transcript.modelContext != nil else { return }
+            transcript.remoteAudioURL = remote.url.absoluteString; transcript.audioDuration = remote.duration
+            try context.save()
+        }
+        guard let value = transcript.remoteAudioURL, let url = URL(string: value) else { throw ImportError.invalidURL }
+        try await AudioStore.download(url, id: id) { [weak self] fraction in
+            Task { @MainActor in
+                guard let self, self.downloading.contains(id) || self.transcribing.contains(id) else { return }
+                self.downloadProgress[id] = fraction
+            }
+        }
     }
     func changeLevel(_ transcript: Transcript, to value: String?) {
         transcript.targetLevelOverride = value

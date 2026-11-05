@@ -21,6 +21,7 @@ import PodcastCore
     var aiConsent: Bool { didSet { defaults.set(aiConsent, forKey: "aiConsent") } }
     var speechEndpoint: String { didSet { defaults.set(speechEndpoint, forKey: "speechEndpoint") } }
     var transcriptionConsent: Bool { didSet { defaults.set(transcriptionConsent, forKey: "transcriptionConsent") } }
+    var podcastTranscription: PodcastTranscription { didSet { defaults.set(podcastTranscription.rawValue, forKey: "podcastTranscription") } }
     var keepBilibiliVideo: Bool { didSet { defaults.set(keepBilibiliVideo, forKey: "keepBilibiliVideo") } }
     let uid: String
     private let defaults: UserDefaults
@@ -44,12 +45,18 @@ import PodcastCore
         aiConsent = defaults.bool(forKey: "aiConsent")
         speechEndpoint = defaults.string(forKey: "speechEndpoint") ?? ""
         transcriptionConsent = defaults.bool(forKey: "transcriptionConsent")
+        podcastTranscription = PodcastTranscription(rawValue: defaults.string(forKey: "podcastTranscription") ?? "") ?? .podText
         keepBilibiliVideo = defaults.bool(forKey: "keepBilibiliVideo")
         uid = defaults.string(forKey: "podTextUID") ?? UUID().uuidString
         defaults.set(uid, forKey: "podTextUID")
     }
     var speechVoice: AVSpeechSynthesisVoice? { AVSpeechSynthesisVoice(identifier: voice) ?? AVSpeechSynthesisVoice(language: voice) ?? AVSpeechSynthesisVoice(language: "en-US") }
     var level: CEFR { CEFR(rawValue: targetLevel) ?? .b2 }
+}
+
+enum PodcastTranscription: String, CaseIterable {
+    case podText = "podtext", stt
+    var label: String { self == .podText ? "PodText" : "Speech to Text (STT)" }
 }
 
 enum APIKey {

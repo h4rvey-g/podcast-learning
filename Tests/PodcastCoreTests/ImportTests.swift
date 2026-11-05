@@ -113,9 +113,24 @@ private final class StubProtocol: URLProtocol, @unchecked Sendable {
         do {
             let path = request.url!.path
             let data: Data
+            var status = path == "/fail" ? 503 : 200
             if path == "/api/transcript" {
                 guard request.httpMethod == "POST", request.value(forHTTPHeaderField: "Content-Type") == "application/json" else { throw ImportError.invalidResponse }
-                data = try fixture("podtext.json")
+                switch request.value(forHTTPHeaderField: "Test-Scenario") {
+                case "expired-502", "expired-200":
+                    status = request.value(forHTTPHeaderField: "Test-Scenario") == "expired-502" ? 502 : 200
+                    data = Data(#"{"success":false,"code":"","error":"Apple Media Token has expired. Please update bearer token."}"#.utf8)
+                case "missing":
+                    status = 404
+                    data = Data(#"{"success":false,"code":"no_transcript","error":"No transcript for this episode."}"#.utf8)
+                case "blocked":
+                    status = 403; data = Data("<html>Private gateway details</html>".utf8)
+                case "empty-error":
+                    status = 503; data = Data(#"{"success":false,"error":"  "}"#.utf8)
+                case "success-on-error":
+                    status = 502; data = try fixture("podtext.json")
+                default: data = try fixture("podtext.json")
+                }
             } else if path == "/lookup" {
                 if request.url?.query?.contains("id=42&") == true {
                     data = Data(#"{"results":[{"trackId":42,"feedUrl":"https://example.com/feed.xml"}]}"#.utf8)
@@ -123,12 +138,39 @@ private final class StubProtocol: URLProtocol, @unchecked Sendable {
             }
             else if path == "/feed.xml" { data = try fixture("feed.xml") }
             else { data = Data() }
-            let response = HTTPURLResponse(url: request.url!, statusCode: path == "/fail" ? 503 : 200, httpVersion: nil, headerFields: nil)!
+            let response = HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil, headerFields: nil)!
             client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
             client?.urlProtocol(self, didLoad: data); client?.urlProtocolDidFinishLoading(self)
         } catch { client?.urlProtocol(self, didFailWithError: error) }
     }
     override func stopLoading() {}
+}
+
+@MainActor @Test(arguments: ["expired-502", "expired-200", "missing", "blocked", "empty-error", "success-on-error"])
+func podTextFailuresExplainUpstreamCause(scenario: String) async throws {
+    let config = URLSessionConfiguration.ephemeral; config.protocolClasses = [StubProtocol.self]
+    config.httpAdditionalHeaders = ["Test-Scenario": scenario]
+    let session = URLSession(configuration: config); defer { session.invalidateAndCancel() }
+    let link = try EpisodeLink("https://podcasts.apple.com/us/podcast/a-show/id1200361736?i=1000799212333")
+    do {
+        let response = try await PodTextClient().fetch(link, uid: "test-uid", session: session)
+        _ = try response.transcript()
+        Issue.record("A failed PodText response must not produce an imported transcript")
+    } catch let error as ImportError {
+        let message = error.localizedDescription
+        #expect(message.contains("PodText"))
+        if scenario.hasPrefix("expired-") {
+            #expect(message.contains("PodText needs to restore"))
+            #expect(!message.contains("update bearer token"))
+        } else if scenario == "missing" {
+            #expect(message.contains("HTTP 404") && message.contains("No transcript for this episode."))
+        } else {
+            let status = scenario == "blocked" ? 403 : scenario == "empty-error" ? 503 : 502
+            #expect(message.contains("HTTP \(status)"))
+            #expect(message.contains("import a transcript file"))
+            #expect(!message.contains("Private gateway details"))
+        }
+    }
 }
 
 @Test func clientsUseExpectedEndpointsAndRejectHTTPFailures() async throws {

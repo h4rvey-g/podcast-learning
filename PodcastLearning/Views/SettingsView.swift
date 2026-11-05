@@ -43,9 +43,18 @@ struct SettingsView: View {
                 if !testStatus.isEmpty { Text(testStatus).font(.footnote).foregroundStyle(.secondary) }
             } header: { Text("AI") }
             Section {
-                NavigationLink { TranscriptionSettingsView() } label: { row("Audio Transcription", value: settings.transcriptionConsent ? "MAI-Transcribe-2" : "Off", symbol: "waveform.badge.mic", color: .indigo) }
+                Picker(selection: $settings.podcastTranscription) {
+                    ForEach(PodcastTranscription.allCases, id: \.self) { Text($0.label).tag($0) }
+                } label: {
+                    Label { Text("Podcast Transcription") } icon: { SettingsIcon(symbol: "podcasts", color: .indigo) }
+                }.pickerStyle(.navigationLink)
+                Text(settings.podcastTranscription == .podText
+                     ? "PodText retrieves the episode's published transcript."
+                     : "Podcast audio is sent to your configured speech provider, using the same settings as Bilibili. Charges may apply.")
+                    .font(.footnote).foregroundStyle(.secondary)
+                NavigationLink { TranscriptionSettingsView() } label: { row("Audio Transcription", value: settings.transcriptionConsent ? settings.speechModel : "Off", symbol: "waveform.badge.mic", color: .indigo) }
                 Toggle("Keep Bilibili Video", isOn: $settings.keepBilibiliVideo)
-            } header: { Text("Bilibili Imports") }
+            } header: { Text("Link Imports") }
             Section {
                 NavigationLink { SynthesisSettingsView() } label: { row("Speech", value: settings.speechService.label, symbol: "waveform", color: .orange) }
             }

@@ -41,6 +41,7 @@ struct ImportView: View {
         _mode = State(initialValue: initialText.isEmpty || isLink ? 0 : 1)
     }
     private var isBilibili: Bool { (try? BilibiliLink(link)) != nil }
+    private var usesSTT: Bool { isBilibili || settings.podcastTranscription == .stt }
     private var validLink: Bool { isBilibili || (try? EpisodeLink(link)) != nil }
     private var canImport: Bool {
         guard !busy else { return false }
@@ -60,8 +61,10 @@ struct ImportView: View {
                         }.disabled(busy)
                     } header: { Text("Apple Podcasts or Bilibili") } footer: {
                         VStack(alignment: .leading, spacing: 8) {
-                            Text("Apple Podcasts links retrieve transcripts via PodText. Bilibili audio posts (au) and videos (BV/av, including ?p=; b23.tv share links also work) download audio for Microsoft MAI-Transcribe-2.")
-                            if isBilibili { Text("Audio is sent to your configured speech provider; charges may apply. Keep Learn open for transfers. Interrupted imports can be retried without losing downloaded audio.") }
+                            Text(settings.podcastTranscription == .podText
+                                 ? "Apple Podcasts links retrieve transcripts via PodText. Bilibili links download audio for speech to text."
+                                 : "Apple Podcasts and Bilibili links download audio for speech to text.")
+                            if usesSTT { Text("Audio is sent to your configured speech provider; charges may apply. Keep PodLearn open for transfers. Interrupted imports can be retried without losing downloaded audio.") }
                             if !link.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !validLink {
                                 Text("Use an Apple Podcasts episode (?i=…) or a full bilibili.com/audio/au… or /video/BV… link, or a b23.tv share link.").foregroundStyle(.red)
                             }
@@ -98,7 +101,7 @@ struct ImportView: View {
                     }
                 }
                 if mode == 0 {
-                    if previewing { Section { HStack { ProgressView(); Text("Finding transcript…") } } }
+                    if previewing { Section { HStack { ProgressView(); Text(usesSTT ? "Finding episode audio…" : "Finding transcript…") } } }
                     if let preview {
                         Section {
                             HStack(spacing: 12) {
@@ -108,11 +111,11 @@ struct ImportView: View {
                                     Text([preview.author, preview.duration.map(timestamp)].compactMap { $0 }.joined(separator: " · ")).font(.footnote).foregroundStyle(.secondary)
                                 }
                             }.padding(.vertical, 6)
-                            Label(isBilibili ? "Audio ready · Transcript generated after import" : "Transcript found · \(preview.orderedSegments.count) segments", systemImage: "checkmark.circle").foregroundStyle(.green)
+                            Label(usesSTT ? "Audio ready · Transcript generated after import" : "Transcript found · \(preview.orderedSegments.count) segments", systemImage: "checkmark.circle").foregroundStyle(.green)
                             if isBilibili {
                                 Text(settings.keepBilibiliVideo ? "Keep video on · Only audio is uploaded" : "Audio only · No video downloaded").foregroundStyle(.secondary)
-                                if !settings.transcriptionConsent { Text("Enable Audio Transcription in Settings first.").foregroundStyle(.red) }
                             }
+                            if usesSTT && !settings.transcriptionConsent { Text("Enable Audio Transcription in Settings first.").foregroundStyle(.red) }
                             HStack(spacing: 8) {
                                 if findingAudio { ProgressView() } else { Image(systemName: preview.remoteAudioURL == nil ? "speaker.wave.2" : "checkmark.circle").foregroundStyle(.secondary) }
                                 Text(findingAudio ? "Looking for the episode audio…" : audioMessage ?? "Episode audio found").foregroundStyle(.secondary)
@@ -127,7 +130,7 @@ struct ImportView: View {
                         ForEach(CEFR.allCases, id: \.rawValue) { Text($0.rawValue + " and above").tag($0.rawValue) }
                     }.disabled(busy)
                 }
-                if isBilibili && mode == 0 {
+                if usesSTT && mode == 0 {
                     Section { NavigationLink("Audio Transcription Settings") { TranscriptionSettingsView() } }
                 }
                 if busy { Section { HStack { ProgressView(); Text("Importing transcript…") } } }
@@ -149,7 +152,7 @@ struct ImportView: View {
                     if (error as NSError).code != NSUserCancelledError { self.error = error.localizedDescription }
                 }
             }
-            .task(id: "\(mode):\(link):\(previewRevision)") { await loadPreview() }
+            .task(id: "\(mode):\(link):\(settings.podcastTranscription.rawValue):\(previewRevision)") { await loadPreview() }
             .onChange(of: textSource) { _, _ in error = nil }
             .interactiveDismissDisabled(busy)
             .overlay(alignment: .bottom) {
@@ -201,7 +204,7 @@ struct ImportView: View {
             let fetched = isBilibili ? try await store.bilibiliPreview(link) : try await store.podcastPreview(link)
             try Task.checkCancellation()
             preview = fetched; previewing = false
-            if isBilibili { audioMessage = "Bilibili audio found"; return }
+            if usesSTT { audioMessage = isBilibili ? "Bilibili audio found" : "Episode audio found"; return }
             findingAudio = true
             do {
                 let episode = try EpisodeLink(link)
