@@ -2,24 +2,42 @@ import Foundation
 import PDFKit
 
 public enum DocumentTextImporter {
-    public static func supports(_ url: URL) -> Bool { ["pdf", "doc", "docx"].contains(url.pathExtension.lowercased()) }
+    private static let extensions = ["pdf", "doc", "docx", "txt", "srt", "vtt"]
+    public static func supports(_ url: URL) -> Bool { extensions.contains(url.pathExtension.lowercased()) }
     public static func sourceFile(_ id: UUID) throws -> URL {
         let directory = try AudioStore.workDirectory(id)
-        for ext in ["pdf", "doc", "docx"] {
+        for ext in extensions {
             let file = directory.appendingPathComponent("source.\(ext)")
             if FileManager.default.fileExists(atPath: file.path) { return file }
         }
         throw ImportError.service("The original document is missing. Import the file again to start a new session.")
     }
     @MainActor public static func session(from url: URL, level: String? = nil) throws -> Transcript {
-        guard supports(url) else { throw ImportError.service("Choose a PDF, DOC, or DOCX document.") }
-        guard (try url.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0) <= 5_000_000 else { throw ImportError.tooLarge }
-        let transcript = Transcript(title: url.deletingPathExtension().lastPathComponent, author: url.pathExtension.lowercased() == "pdf" ? "PDF document" : "Word document")
+        guard supports(url) else { throw ImportError.service("Choose a PDF, DOC, DOCX, TXT, SRT, or VTT file.") }
+        let values = try url.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey])
+        guard values.isRegularFile == true else { throw ImportError.service("Choose a file, not a folder.") }
+        guard (values.fileSize ?? 0) <= 5_000_000 else { throw ImportError.tooLarge }
+        let ext = url.pathExtension.lowercased()
+        let author = ext == "pdf" ? "PDF document" : ["doc", "docx"].contains(ext) ? "Word document" : "Text file"
+        let transcript = Transcript(title: url.deletingPathExtension().lastPathComponent, author: author)
         transcript.targetLevelOverride = level; transcript.synthesisState = "preparing"
         do {
             let destination = try AudioStore.workDirectory(transcript.id).appendingPathComponent("source.\(url.pathExtension.lowercased())")
             try FileManager.default.copyItem(at: url, to: destination)
             guard (try destination.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0) <= 5_000_000 else { throw ImportError.tooLarge }
+        } catch { try? AudioStore.delete(transcript.id); throw error }
+        return transcript
+    }
+    @MainActor public static func session(text: String, title: String, fileExtension: String = "txt", level: String? = nil) throws -> Transcript {
+        let ext = fileExtension.lowercased()
+        guard ["txt", "srt", "vtt"].contains(ext) else { throw ImportError.service("Choose TXT, SRT, or VTT text.") }
+        let paragraphs = try TextImporter.paragraphs(text, fileExtension: ext)
+        let name = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let transcript = Transcript(title: name.isEmpty ? String(paragraphs[0].prefix(65)) : name, author: "Pasted text")
+        transcript.targetLevelOverride = level; transcript.synthesisState = "preparing"
+        do {
+            let source = try AudioStore.workDirectory(transcript.id).appendingPathComponent("source.\(ext)")
+            try Data(text.utf8).write(to: source, options: .atomic)
         } catch { try? AudioStore.delete(transcript.id); throw error }
         return transcript
     }
@@ -32,9 +50,16 @@ public enum DocumentTextImporter {
         transcript.synthesisState = "pending"; transcript.synthesisError = nil
     }
     public static func extract(from url: URL) throws -> String {
-        guard supports(url) else { throw ImportError.service("Choose a PDF, DOC, or DOCX document.") }
+        guard supports(url) else { throw ImportError.service("Choose a PDF, DOC, DOCX, TXT, SRT, or VTT file.") }
         guard (try url.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0) <= 5_000_000 else { throw ImportError.tooLarge }
-        if url.pathExtension.lowercased() != "pdf" {
+        let ext = url.pathExtension.lowercased()
+        if ["txt", "srt", "vtt"].contains(ext) {
+            let data = try Data(contentsOf: url)
+            guard data.count <= 5_000_000 else { throw ImportError.tooLarge }
+            guard let text = String(data: data, encoding: .utf8) else { throw ImportError.service("Choose a UTF-8 text file.") }
+            return try TextImporter.paragraphs(text, fileExtension: ext).joined(separator: "\n\n")
+        }
+        if ext != "pdf" {
             do { return try WordTextImporter.extract(from: url) }
             catch is CancellationError { throw CancellationError() }
             catch let error as ImportError { throw error }

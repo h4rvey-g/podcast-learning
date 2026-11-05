@@ -3,21 +3,30 @@ import UniformTypeIdentifiers
 import PodcastCore
 
 struct ImportView: View {
+    private enum TextSource: String, CaseIterable {
+        case paste = "Paste Text", file = "Import File"
+        var symbol: String { self == .paste ? "text.cursor" : "doc.badge.arrow.up" }
+    }
+    private struct SelectedFile {
+        let url: URL
+        let size: Int
+        let accessing: Bool
+        func release() { if accessing { url.stopAccessingSecurityScopedResource() } }
+    }
+    @Environment(\.accentTheme) private var theme
     @Environment(AppStore.self) private var store
     @Environment(SettingsStore.self) private var settings
     @Environment(\.dismiss) private var dismiss
     let onImported: (Transcript) -> Void
     @State private var mode = 0
-    @State private var input = ""
+    @State private var link = ""
+    @State private var text = ""
     @State private var title = ""
+    @State private var textSource = TextSource.paste
+    @State private var selectedFile: SelectedFile?
     @State private var level = "global"
     @State private var filePicker = false
-    @State private var confirmFileImport = false
     @State private var busy = false
-    @State private var busyMessage = ""
-    @State private var generateAudio = false
-    @State private var originalText: String?
-    @State private var operation: Task<Void, Never>?
     @State private var error: String?
     @State private var preview: Transcript?
     @State private var previewing = false
@@ -26,12 +35,18 @@ struct ImportView: View {
     @State private var previewRevision = 0
     init(initialText: String, onImported: @escaping (Transcript) -> Void) {
         self.onImported = onImported
-        _input = State(initialValue: initialText)
-        let link = (try? EpisodeLink(initialText)) != nil || (try? BilibiliLink(initialText)) != nil
-        _mode = State(initialValue: initialText.isEmpty || link ? 0 : 1)
+        let isLink = (try? EpisodeLink(initialText)) != nil || (try? BilibiliLink(initialText)) != nil
+        _link = State(initialValue: isLink ? initialText : "")
+        _text = State(initialValue: isLink ? "" : initialText)
+        _mode = State(initialValue: initialText.isEmpty || isLink ? 0 : 1)
     }
-    private var isBilibili: Bool { (try? BilibiliLink(input)) != nil }
-    private var validLink: Bool { isBilibili || (try? EpisodeLink(input)) != nil }
+    private var isBilibili: Bool { (try? BilibiliLink(link)) != nil }
+    private var validLink: Bool { isBilibili || (try? EpisodeLink(link)) != nil }
+    private var canImport: Bool {
+        guard !busy else { return false }
+        if mode == 0 { return validLink && preview != nil }
+        return textSource == .file ? selectedFile != nil : !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
     var body: some View {
         NavigationStack {
             Form {
@@ -40,45 +55,47 @@ struct ImportView: View {
                     Section {
                         HStack {
                             Image(systemName: "link").foregroundStyle(.secondary)
-                            TextField("Apple Podcasts or Bilibili URL", text: $input).keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
-                            if !input.isEmpty { Button("Clear Link", systemImage: "xmark.circle.fill") { input = "" }.labelStyle(.iconOnly).foregroundStyle(.secondary).buttonStyle(.borderless).frame(minWidth: 44, minHeight: 44) }
-                        }
+                            TextField("Apple Podcasts or Bilibili URL", text: $link).keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
+                            if !link.isEmpty { Button("Clear Link", systemImage: "xmark.circle.fill") { link = "" }.labelStyle(.iconOnly).foregroundStyle(.secondary).buttonStyle(.borderless).frame(minWidth: 44, minHeight: 44) }
+                        }.disabled(busy)
                     } header: { Text("Apple Podcasts or Bilibili") } footer: {
                         VStack(alignment: .leading, spacing: 8) {
                             Text("Apple Podcasts links retrieve transcripts via PodText. Bilibili audio posts (au) and videos (BV/av, including ?p=; b23.tv share links also work) download audio for Microsoft MAI-Transcribe-2.")
                             if isBilibili { Text("Audio is sent to your configured speech provider; charges may apply. Keep Learn open for transfers. Interrupted imports can be retried without losing downloaded audio.") }
-                            if !input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !validLink {
+                            if !link.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !validLink {
                                 Text("Use an Apple Podcasts episode (?i=…) or a full bilibili.com/audio/au… or /video/BV… link, or a b23.tv share link.").foregroundStyle(.red)
                             }
                         }
                     }
                 } else {
-                    Section {
-                        Button("Import File", systemImage: "doc.badge.plus") {
-                            if input.isEmpty && title.isEmpty && originalText == nil { filePicker = true }
-                            else { confirmFileImport = true }
-                        }.disabled(busy)
-                        TextField("Title (Optional)", text: $title).disabled(busy)
-                        TextEditor(text: $input).frame(minHeight: 200).accessibilityLabel("Transcript Text")
-                            .accessibilityHint("Paste text here, or use Import File.").disabled(busy)
-                    } header: { Text("Paste Text or Import a File") } footer: {
-                        Text("PDF, DOC, DOCX, TXT, SRT, and VTT. PDF and Word files create a session automatically: extract text on-device → AI cleanup → audio with \(settings.ttsModel). Enable AI and save your AI and TTS keys in Settings first; charges may apply. Text files appear in the editor above. Scanned documents require OCR.")
+                    Section("Choose One Source") {
+                        HStack(spacing: 10) {
+                            ForEach(TextSource.allCases, id: \.self) { source in sourceButton(source) }
+                        }
+                        .listRowInsets(EdgeInsets()).listRowBackground(Color.clear)
                     }
-                    Section {
-                        Button("Clean Text with AI", systemImage: "sparkles") { operation = Task { await cleanText() } }
-                            .disabled(busy || input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                        if let originalText {
-                            Text("AI-cleaned text · Review for missing or changed content before importing.").font(.footnote).foregroundStyle(.secondary)
-                            Button("Restore Original Text") { input = originalText; self.originalText = nil }.disabled(busy)
+                    if textSource == .paste {
+                        Section("Paste Text") {
+                            TextField("Title (Optional)", text: $title).disabled(busy)
+                            TextEditor(text: $text).frame(minHeight: 200).accessibilityLabel("Transcript Text")
+                                .accessibilityHint("Paste the text you want to import.").disabled(busy)
                         }
-                    } footer: { Text("Optional for pasted text and text files. This sends text to your configured AI provider and may incur charges. Document extraction stays on-device.") }
-                    Section {
-                        Toggle("Generate Audio After Import", isOn: $generateAudio).disabled(busy)
-                        if generateAudio {
-                            Text("\(input.count.formatted()) characters will be sent to OpenRouter using \(settings.ttsModel) · \(settings.ttsVoice). Charges may apply. Review the text above first.").font(.footnote).foregroundStyle(.secondary)
+                    } else {
+                        Section(selectedFile == nil ? "Import File" : "Selected File") {
+                            if let selectedFile {
+                                HStack(spacing: 12) {
+                                    Image(systemName: "doc.text").font(.title2).foregroundStyle(theme.color)
+                                        .frame(width: 44, height: 52).background(theme.color.opacity(0.1), in: RoundedRectangle(cornerRadius: 8))
+                                    VStack(alignment: .leading, spacing: 5) {
+                                        Text(selectedFile.url.lastPathComponent).font(.headline)
+                                        Text("\(selectedFile.url.pathExtension.uppercased()) document · \(ByteCountFormatter.string(fromByteCount: Int64(selectedFile.size), countStyle: .file))")
+                                            .font(.footnote).foregroundStyle(.secondary)
+                                    }
+                                }.padding(.vertical, 4).accessibilityElement(children: .combine)
+                            }
+                            Button(selectedFile == nil ? "Choose File" : "Change File", systemImage: "folder") { filePicker = true }.disabled(busy)
                         }
-                        NavigationLink("Generated Audio Settings") { SynthesisSettingsView() }.disabled(busy)
-                    } footer: { Text("Generated audio is saved for offline playback and dictation. Keep PodLearn open during generation. Without generated audio, practice uses the offline system voice.") }
+                    }
                 }
                 if mode == 0 {
                     if previewing { Section { HStack { ProgressView(); Text("Finding transcript…") } } }
@@ -108,36 +125,32 @@ struct ImportView: View {
                     Picker("Target Level", selection: $level) {
                         Text("Use Global (\(settings.targetLevel))").tag("global")
                         ForEach(CEFR.allCases, id: \.rawValue) { Text($0.rawValue + " and above").tag($0.rawValue) }
-                    }
+                    }.disabled(busy)
                 }
                 if isBilibili && mode == 0 {
                     Section { NavigationLink("Audio Transcription Settings") { TranscriptionSettingsView() } }
                 }
-                if busy { Section { HStack { ProgressView(); Text(busyMessage) }; if operation != nil { Button("Cancel") { operation?.cancel() } } } }
+                if busy { Section { HStack { ProgressView(); Text("Importing transcript…") } } }
                 if let error { Section { Label(error, systemImage: "exclamationmark.triangle").foregroundStyle(.red) } }
-                Section { Text(settings.aiConsent ? "After import, this transcript is sent to your AI provider for key sentences and Chinese glosses." : "Offline vocabulary marking is ready. Enable AI in Settings for key sentences and Chinese glosses.").font(.footnote).foregroundStyle(.secondary) }
+                Section {
+                    Text(settings.aiConsent ? "After import, this transcript is sent to your AI provider for key sentences and Chinese glosses." : mode == 0 ? "Offline vocabulary marking is ready. Enable AI in Settings for key sentences and Chinese glosses." : "Enable AI in Settings for automatic text cleanup, key sentences, and Chinese glosses.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
             }
             .navigationTitle("New Transcript").navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { RoundButton(title: "Close", symbol: "xmark") { dismiss() }.disabled(busy) }
-                ToolbarItem(placement: .confirmationAction) { Button(mode != 0 && generateAudio ? "Import & Generate" : "Import") { Task { await importContent() } }.fontWeight(.semibold).buttonStyle(.borderedProminent).buttonBorderShape(.capsule).disabled(input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || busy || (mode == 0 && preview == nil)) }
-            }
-            .confirmationDialog("Replace This Draft?", isPresented: $confirmFileImport, titleVisibility: .visible) {
-                Button("Import File") { filePicker = true }
-                Button("Cancel", role: .cancel) {}
-            } message: {
-                Text("A text file replaces the editor contents. A PDF or Word file starts a new session. Your current draft is not saved.")
+                ToolbarItem(placement: .confirmationAction) { Button("Import") { Task { await importContent() } }.fontWeight(.semibold).buttonStyle(.borderedProminent).buttonBorderShape(.capsule).disabled(!canImport) }
             }
             .fileImporter(isPresented: $filePicker, allowedContentTypes: [.pdf, UTType(importedAs: "com.microsoft.word.doc"), UTType(importedAs: "org.openxmlformats.wordprocessingml.document"), .plainText, UTType(filenameExtension: "srt") ?? .plainText, UTType(filenameExtension: "vtt") ?? .plainText]) { result in
-                do {
-                    let url = try result.get()
-                    if DocumentTextImporter.supports(url) {
-                        let transcript = try store.importDocument(url, level: level == "global" ? nil : level)
-                        dismiss(); onImported(transcript)
-                    } else { operation = Task { await loadFile(url) } }
-                } catch { self.error = error.localizedDescription }
+                switch result {
+                case .success(let url): selectFile(url)
+                case .failure(let error):
+                    if (error as NSError).code != NSUserCancelledError { self.error = error.localizedDescription }
+                }
             }
-            .task(id: "\(mode):\(input):\(previewRevision)") { await loadPreview() }
+            .task(id: "\(mode):\(link):\(previewRevision)") { await loadPreview() }
+            .onChange(of: textSource) { _, _ in error = nil }
             .interactiveDismissDisabled(busy)
             .overlay(alignment: .bottom) {
                 if mode == 0 && !previewing && preview == nil && error != nil {
@@ -145,39 +158,39 @@ struct ImportView: View {
                 }
             }
         }.presentationDragIndicator(.visible)
+            .onDisappear { selectedFile?.release(); selectedFile = nil }
     }
-    @MainActor private func loadFile(_ url: URL) async {
-        busy = true; busyMessage = "Extracting text…"; error = nil
-        defer { busy = false; operation = nil }
-        let access = url.startAccessingSecurityScopedResource()
-        defer { if access { url.stopAccessingSecurityScopedResource() } }
-        do {
-            let extraction = Task.detached(priority: .userInitiated) {
-                guard (try url.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0) <= 5_000_000 else { throw ImportError.tooLarge }
-                let data = try Data(contentsOf: url)
-                guard data.count <= 5_000_000 else { throw ImportError.tooLarge }
-                guard let text = String(data: data, encoding: .utf8) else { throw ImportError.service("Choose a UTF-8 text file.") }
-                if ["srt", "vtt"].contains(url.pathExtension.lowercased()) {
-                    return try TextImporter.paragraphs(text, fileExtension: url.pathExtension).joined(separator: "\n\n")
-                }
-                return text
+    private func sourceButton(_ source: TextSource) -> some View {
+        let selected = textSource == source
+        return Button { textSource = source } label: {
+            HStack(spacing: 8) {
+                Image(systemName: source.symbol)
+                Text(source.rawValue).font(.subheadline.weight(.semibold)).frame(maxWidth: .infinity, alignment: .leading)
+                Image(systemName: selected ? "checkmark.circle" : "circle")
             }
-            let text = try await withTaskCancellationHandler { try await extraction.value } onCancel: { extraction.cancel() }
-            try Task.checkCancellation()
-            input = text; title = url.deletingPathExtension().lastPathComponent
-            originalText = nil
-        } catch { if !Task.isCancelled { self.error = error.localizedDescription } }
+            .foregroundStyle(selected ? theme.color : .primary)
+            .padding(.horizontal, 12).frame(maxWidth: .infinity, minHeight: 60)
+            .background(selected ? theme.color.opacity(0.1) : Palette.cell, in: RoundedRectangle(cornerRadius: 12))
+            .overlay(RoundedRectangle(cornerRadius: 12).stroke(selected ? theme.color : Color(uiColor: .separator), lineWidth: selected ? 1.5 : 0.5))
+        }.buttonStyle(.plain).disabled(busy)
+            .accessibilityElement(children: .ignore).accessibilityLabel(source.rawValue)
+            .accessibilityAddTraits(selected ? .isSelected : [])
     }
-    @MainActor private func cleanText() async {
-        busy = true; busyMessage = "Cleaning text…"; error = nil
-        defer { busy = false; operation = nil }
-        let source = input
+    private func selectFile(_ url: URL) {
+        let access = url.startAccessingSecurityScopedResource()
         do {
-            let cleaned = try await AIAnalyzer(settings: settings).cleanText(source)
-            try Task.checkCancellation()
-            if originalText == nil { originalText = source }
-            input = cleaned.joined(separator: "\n\n")
-        } catch { if !Task.isCancelled { self.error = error.localizedDescription } }
+            guard DocumentTextImporter.supports(url) else { throw ImportError.service("Choose a PDF, DOC, DOCX, TXT, SRT, or VTT file.") }
+            let values = try url.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey])
+            guard values.isRegularFile == true else { throw ImportError.service("Choose a file, not a folder.") }
+            guard (values.fileSize ?? 0) <= 5_000_000 else { throw ImportError.tooLarge }
+            selectedFile?.release()
+            // Keep provider access until Import stages a local copy or this sheet closes.
+            selectedFile = SelectedFile(url: url, size: values.fileSize ?? 0, accessing: access)
+            error = nil
+        } catch {
+            if access { url.stopAccessingSecurityScopedResource() }
+            self.error = error.localizedDescription
+        }
     }
     @MainActor private func loadPreview() async {
         preview = nil; audioMessage = nil; error = nil; previewing = false; findingAudio = false
@@ -185,14 +198,14 @@ struct ImportView: View {
         do {
             try await Task.sleep(for: .milliseconds(500)); try Task.checkCancellation()
             previewing = true
-            let fetched = isBilibili ? try await store.bilibiliPreview(input) : try await store.podcastPreview(input)
+            let fetched = isBilibili ? try await store.bilibiliPreview(link) : try await store.podcastPreview(link)
             try Task.checkCancellation()
             preview = fetched; previewing = false
             if isBilibili { audioMessage = "Bilibili audio found"; return }
             findingAudio = true
             do {
-                let link = try EpisodeLink(input)
-                let audio = try await AudioResolver.resolve(link, title: fetched.title)
+                let episode = try EpisodeLink(link)
+                let audio = try await AudioResolver.resolve(episode, title: fetched.title)
                 try Task.checkCancellation()
                 fetched.remoteAudioURL = audio?.url.absoluteString; fetched.audioDuration = audio?.duration
                 audioMessage = audio == nil ? "Audio unavailable · Text to speech is ready" : "Episode audio found"
@@ -207,13 +220,16 @@ struct ImportView: View {
         }
     }
     @MainActor private func importContent() async {
-        busy = true; busyMessage = mode == 0 ? "Fetching transcript…" : "Marking vocabulary…"; store.importing = true; error = nil
+        guard canImport else { return }
+        busy = true; store.importing = true; error = nil
         defer { busy = false; store.importing = false }
         do {
             let transcript: Transcript
-            if mode == 0 && isBilibili { transcript = try await store.importBilibili(input, level: level == "global" ? nil : level, preview: preview) }
-            else if mode == 0 { transcript = try await store.importPodcast(input, level: level == "global" ? nil : level, preview: preview) }
-            else { transcript = try store.importText(input, title: title, level: level == "global" ? nil : level, generateAudio: generateAudio) }
+            let target = level == "global" ? nil : level
+            if mode == 0 && isBilibili { transcript = try await store.importBilibili(link, level: target, preview: preview) }
+            else if mode == 0 { transcript = try await store.importPodcast(link, level: target, preview: preview) }
+            else if textSource == .file, let selectedFile { transcript = try store.importDocument(selectedFile.url, level: target) }
+            else { transcript = try store.importText(text, title: title, level: target) }
             dismiss(); onImported(transcript)
         } catch { self.error = error.localizedDescription }
     }

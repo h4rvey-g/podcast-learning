@@ -68,17 +68,7 @@ struct LibraryView: View {
         .onOpenURL { url in
             if url.isFileURL {
                 do {
-                    if DocumentTextImporter.supports(url) {
-                        path.append(try store.importDocument(url))
-                        return
-                    }
-                    let access = url.startAccessingSecurityScopedResource(); defer { if access { url.stopAccessingSecurityScopedResource() } }
-                    guard (try url.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0) <= 5_000_000 else { throw ImportError.tooLarge }
-                    let data = try Data(contentsOf: url)
-                    guard data.count <= 5_000_000 else { throw ImportError.tooLarge }
-                    guard let text = String(data: data, encoding: .utf8) else { throw ImportError.invalidResponse }
-                    let transcript = try store.importText(text, title: url.deletingPathExtension().lastPathComponent, fileExtension: url.pathExtension)
-                    path.append(transcript)
+                    path.append(try store.importDocument(url))
                 } catch { store.error = error.localizedDescription }
             } else if url.host == "podcasts.apple.com" || (try? BilibiliLink(url.absoluteString)) != nil { sharedText = url.absoluteString; showImport = true }
         }

@@ -57,21 +57,15 @@ import PodcastCore
         do { try AudioStore.delete(id) }
         catch { self.error = "Transcript removed, but its downloaded media could not be deleted: \(error.localizedDescription)" }
     }
-    func importText(_ text: String, title: String, fileExtension: String = "txt", level: String? = nil, generateAudio: Bool = false) throws -> Transcript {
-        if generateAudio { _ = try speechSynthesizer() }
-        let paragraphs = try TextImporter.paragraphs(text, fileExtension: fileExtension)
-        let name = title.trimmingCharacters(in: .whitespacesAndNewlines)
-        let transcript = TextImporter.makeTranscript(title: name.isEmpty ? String(paragraphs[0].prefix(65)) : name, paragraphs: paragraphs)
-        transcript.targetLevelOverride = level
-        if generateAudio { transcript.synthesisState = "pending" }
-        try insert(transcript)
-        if generateAudio { synthesize(transcript) }
-        return transcript
+    func importText(_ text: String, title: String, fileExtension: String = "txt", level: String? = nil) throws -> Transcript {
+        try importSession(DocumentTextImporter.session(text: text, title: title, fileExtension: fileExtension, level: level))
     }
     func importDocument(_ url: URL, level: String? = nil) throws -> Transcript {
         let access = url.startAccessingSecurityScopedResource()
         defer { if access { url.stopAccessingSecurityScopedResource() } }
-        let transcript = try DocumentTextImporter.session(from: url, level: level)
+        return try importSession(DocumentTextImporter.session(from: url, level: level))
+    }
+    private func importSession(_ transcript: Transcript) throws -> Transcript {
         context.insert(transcript)
         do { try context.save() }
         catch { context.delete(transcript); try? AudioStore.delete(transcript.id); throw error }
