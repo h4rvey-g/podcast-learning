@@ -73,8 +73,19 @@ import PodcastCore
         do { try AVAudioSession.sharedInstance().setCategory(.playback, mode: .spokenAudio); try AVAudioSession.sharedInstance().setActive(true); return true }
         catch { self.error = error.localizedDescription; return false }
     }
+    func isWaitingForAudio(_ transcript: Transcript, settings: SettingsStore) -> Bool {
+        settings.speechService == .openRouter &&
+        ["preparing", "pending", "preparationFailed", "failed"].contains(transcript.synthesisState) &&
+        AudioStore.localURL(transcript.id) == nil
+    }
     func play(text: String, segment: Segment? = nil, transcript: Transcript? = nil, settings: SettingsStore, clip: Bool = true, startAt: Double? = nil) {
-        stop(); guard activate() else { return }
+        stop()
+        if let transcript, isWaitingForAudio(transcript, settings: settings) {
+            error = "AI audio is not ready. Wait for generation to finish, or retry document processing or audio generation in the reader."
+            return
+        }
+        guard activate() else { return }
+        error = nil
         segmentID = segment?.id; transcriptID = transcript?.id; speechProgress = 0
         let range = PlaybackRange(start: segment?.start ?? -1, end: segment?.end ?? 0)
         let validTiming = range != nil
@@ -99,7 +110,7 @@ import PodcastCore
                     if self.isPlaying { self.player.playImmediately(atRate: self.speed) }
                 }
             }
-        } else if settings.speechService == .openRouter && !["preparing", "pending"].contains(transcript?.synthesisState ?? "") {
+        } else if settings.speechService == .openRouter {
             playGenerated(text: text, transcript: transcript, settings: settings, clip: clip)
         } else {
             let utterance = AVSpeechUtterance(string: text)
@@ -146,7 +157,7 @@ import PodcastCore
         }?.id
     }
     func toggle(text: String, transcript: Transcript, settings: SettingsStore) {
-        if transcriptID == transcript.id && (isPlaying || speech.isPaused || player.currentItem != nil) { toggleCurrent() }
+        if !isWaitingForAudio(transcript, settings: settings), transcriptID == transcript.id && (isPlaying || speech.isPaused || player.currentItem != nil) { toggleCurrent() }
         else { play(text: text, transcript: transcript, settings: settings, clip: false) }
     }
     // Reads cached state only: the reader's rows must not depend on the 10 Hz position tick.
@@ -155,7 +166,7 @@ import PodcastCore
         transcriptID == transcript.id && activeSegmentID == segment.id
     }
     func toggleParagraph(_ segment: Segment, transcript: Transcript, settings: SettingsStore) {
-        if isCurrent(segment, in: transcript) { toggleCurrent() }
+        if !isWaitingForAudio(transcript, settings: settings), isCurrent(segment, in: transcript) { toggleCurrent() }
         else { play(text: segment.text, segment: segment, transcript: transcript, settings: settings) }
     }
     private func toggleCurrent() {

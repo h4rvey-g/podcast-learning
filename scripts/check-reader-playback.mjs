@@ -57,6 +57,7 @@ enum TextMatch { static func highlights(in text: String, items: [DictationItem])
     var segmentID: UUID?; var activeSegmentID: UUID?; var utterance: String?
 ${audio.slice(activeStart, activeEnd)}
     func toggleParagraph(_ segment: Segment, transcript: Transcript, settings: SettingsStore) {}
+    func isWaitingForAudio(_ transcript: Transcript, settings: SettingsStore) -> Bool { false }
 }
 enum ReaderSelection { case word(String, Sentence), sentence(Sentence) }
 func timestamp(_ seconds: Double) -> String { "00:00" }

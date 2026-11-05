@@ -126,6 +126,7 @@ import PodcastCore
                 Task { @MainActor in
                     guard let self, self.synthesizing.contains(id) else { return }
                     self.synthesisProgress[id] = Double(completed) / Double(total)
+                    self.synthesisStatus[id] = completed == total ? "Combining AI audio…" : "Generating AI audio · \(completed) of \(total) parts"
                 }
             }
             guard transcript.modelContext != nil else { return }
@@ -139,6 +140,27 @@ import PodcastCore
             transcript.synthesisError = error.localizedDescription
             save()
         }
+    }
+    func importProgress(_ transcript: Transcript) -> (title: String, fraction: Double?)? {
+        let id = transcript.id
+        if transcript.transcriptionState == "failed" || ["failed", "preparationFailed"].contains(transcript.synthesisState) { return nil }
+        if transcript.transcriptionState == "pending" {
+            let uploaded = transcriptionProgress[id]
+            let fraction = if let uploaded { uploaded < 1 ? uploaded : nil } else { downloadProgress[id] }
+            return (transcriptionStatus[id] ?? "Preparing transcription…", fraction)
+        }
+        if transcript.synthesisState == "preparing" {
+            return (synthesisStatus[id] ?? "Preparing document…", nil)
+        }
+        if transcript.synthesisState == "pending" {
+            let fraction = synthesisProgress[id]
+            return (synthesisStatus[id] ?? "Generating AI audio…", fraction == 1 ? nil : fraction)
+        }
+        if downloading.contains(id) {
+            return (transcript.remoteAudioURL == nil ? "Finding episode audio…" : "Downloading audio…", downloadProgress[id])
+        }
+        if transcript.analysisState == "pending" { return ("Finding key sentences…", nil) }
+        return nil
     }
     func podcastPreview(_ input: String) async throws -> Transcript {
         let link = try EpisodeLink(input)

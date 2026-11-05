@@ -30,6 +30,7 @@ struct ReaderView: View {
                     Text([transcript.author, transcript.duration.map(timestamp), "\(transcript.activeItems.count) words"].compactMap { $0 }.joined(separator: " · ")).font(.footnote).foregroundStyle(.secondary)
                 }.frame(maxWidth: .infinity, alignment: .leading)
             }.padding(.horizontal, 16)
+            ImportProgressView(transcript: transcript).padding(.horizontal, 20)
             Picker("Content", selection: $tab) { Text("Transcript").tag(0); Text("Items").tag(1) }.pickerStyle(.segmented).padding(.horizontal, 16)
             if tab == 0 {
                 ScrollView(.horizontal, showsIndicators: false) {
@@ -59,6 +60,7 @@ struct ReaderView: View {
                                         if let start = segment.start { Text(timestamp(start)).monospacedDigit() }
                                     }.font(.footnote).foregroundStyle(.secondary).frame(minHeight: 36)
                                 }.buttonStyle(.plain).accessibilityLabel("\(player.isActive(segment, in: transcript) ? "Pause" : "Play") \(segment.speaker ?? "paragraph")")
+                                    .disabled(player.isWaitingForAudio(transcript, settings: settings))
                                 ForEach(segment.orderedSentences) { sentence in
                                     HighlightedText(sentence: sentence, items: transcript.activeItems) { word in
                                         // A long press already opened the paragraph sheet for this touch.
@@ -109,7 +111,8 @@ struct ReaderView: View {
                 if transcript.transcriptionState == "none" || transcript.transcriptionState == "done" { AudioDownloadStatus(transcript: transcript) }
                 if tab == 0 && !transcript.orderedSegments.isEmpty { PlaybackBar(transcript: transcript) }
                 PrimaryButton(title: dictationTitle, symbol: "pencil.line") { player.stop(); practice = true }
-                    .disabled(transcript.activeItems.isEmpty).opacity(transcript.activeItems.isEmpty ? 0.5 : 1)
+                    .disabled(transcript.activeItems.isEmpty || player.isWaitingForAudio(transcript, settings: settings))
+                    .opacity(transcript.activeItems.isEmpty || player.isWaitingForAudio(transcript, settings: settings) ? 0.5 : 1)
             }.padding(.horizontal, 16).padding(.bottom, 8)
         }
         .sheet(item: $selection, onDismiss: { store.save() }) { value in
@@ -139,14 +142,8 @@ struct ReaderView: View {
     private func loadDictationSession() { dictationSession = DictationSessionStore.load(for: transcript.id) }
     @ViewBuilder private var transcriptionStatus: some View {
         if transcript.transcriptionState == "pending" {
-            VStack(alignment: .leading, spacing: 10) {
-                Label(store.transcriptionStatus[transcript.id] ?? "Preparing transcription…", systemImage: "waveform")
-                    .font(.headline)
-                ProgressView(value: store.transcriptionProgress[transcript.id].flatMap { $0 < 1 ? $0 : nil } ?? (store.transcriptionProgress[transcript.id] == nil ? store.downloadProgress[transcript.id] : nil))
-                    .accessibilityLabel("Transcription Transfer")
-                Text("Keep Learn open. Temporary network failures retry automatically; audio and completed results are kept for retry.")
-                    .font(.footnote).foregroundStyle(.secondary)
-            }
+            Text("Keep PodLearn open. Temporary network failures retry automatically; downloaded audio and completed results are kept for retry.")
+                .font(.footnote).foregroundStyle(.secondary)
         } else if transcript.transcriptionState == "failed" {
             VStack(alignment: .leading, spacing: 8) {
                 Label("Transcription Interrupted", systemImage: "exclamationmark.arrow.circlepath").font(.headline)
@@ -158,12 +155,9 @@ struct ReaderView: View {
         }
     }
     @ViewBuilder private var synthesisStatus: some View {
-        if transcript.synthesisState == "preparing" {
-            VStack(alignment: .leading, spacing: 8) {
-                Text(store.synthesisStatus[transcript.id] ?? "Preparing document…").font(.headline)
-                ProgressView(value: store.synthesisProgress[transcript.id]).accessibilityLabel("Document Processing")
-                Text("Your session is saved. Text extraction, AI cleanup, and audio generation run automatically. Keep PodLearn open.").font(.footnote).foregroundStyle(.secondary)
-            }
+        if ["preparing", "pending"].contains(transcript.synthesisState) {
+            Text("Your session is saved. Keep PodLearn open. You can read while processing finishes; playback uses your selected speech provider once audio is ready.")
+                .font(.footnote).foregroundStyle(.secondary)
         } else if transcript.synthesisState == "preparationFailed" {
             VStack(alignment: .leading, spacing: 8) {
                 Label("Document Processing Interrupted", systemImage: "exclamationmark.arrow.circlepath").font(.headline)
@@ -172,12 +166,6 @@ struct ReaderView: View {
                 Button("Retry Document Processing", systemImage: "arrow.clockwise") { store.synthesize(transcript) }.frame(minHeight: 44)
                 NavigationLink("AI Settings") { SettingsView() }.frame(minHeight: 44)
                 NavigationLink("Speech Settings") { SynthesisSettingsView() }.frame(minHeight: 44)
-            }
-        } else if transcript.synthesisState == "pending" {
-            VStack(alignment: .leading, spacing: 8) {
-                Text(store.synthesisProgress[transcript.id] == 1 ? "Combining audio…" : "Generating AI audio…").font(.headline)
-                ProgressView(value: store.synthesisProgress[transcript.id]).accessibilityLabel("Audio Generation")
-                Text("Keep PodLearn open. You can read and practice with the offline voice while waiting. Completed parts are kept for retry.").font(.footnote).foregroundStyle(.secondary)
             }
         } else if transcript.synthesisState == "failed" {
             VStack(alignment: .leading, spacing: 8) {
@@ -191,7 +179,6 @@ struct ReaderView: View {
         }
     }
     @ViewBuilder private var analysisStatus: some View {
-        if transcript.analysisState == "pending" { HStack { ProgressView(); Text("Finding key sentences…").font(.footnote).foregroundStyle(Palette.ai) } }
         if let error = transcript.analysisError {
             VStack(alignment: .leading, spacing: 8) {
                 Text(error).font(.footnote).foregroundStyle(.secondary)
@@ -205,19 +192,23 @@ struct PlaybackBar: View {
     let transcript: Transcript
     @Environment(ClipPlayer.self) private var player
     @Environment(SettingsStore.self) private var settings
-    @Environment(AppStore.self) private var store
     var body: some View {
         HStack(spacing: 4) {
             Button("Back 15 Seconds", systemImage: "gobackward.15") { player.skip(-15) }.labelStyle(.iconOnly).frame(width: 44, height: 44).disabled(AudioStore.localURL(transcript.id) == nil)
             Button(player.isPlaying ? "Pause" : "Play", systemImage: player.isPlaying ? "pause.fill" : "play.fill") {
                 player.toggle(text: transcript.spokenText, transcript: transcript, settings: settings)
             }.labelStyle(.iconOnly).frame(width: 44, height: 44).foregroundStyle(Palette.cell).background(.primary, in: Circle())
+                .disabled(player.isWaitingForAudio(transcript, settings: settings))
+                .opacity(player.isWaitingForAudio(transcript, settings: settings) ? 0.5 : 1)
             Button("Forward 15 Seconds", systemImage: "goforward.15") { player.skip(15) }.labelStyle(.iconOnly).frame(width: 44, height: 44).disabled(AudioStore.localURL(transcript.id) == nil)
             VStack(spacing: 3) {
                 if AudioStore.localURL(transcript.id) != nil {
                     ProgressView(value: min(player.position, player.duration), total: max(1, player.duration)).tint(.primary)
                     HStack { Text(timestamp(player.position)); Spacer(); Text("−" + timestamp(max(0, player.duration - player.position))) }.font(.caption2).foregroundStyle(.secondary).monospacedDigit()
-                } else { Text(store.downloading.contains(transcript.id) ? "Text to Speech · Downloading" : "Text to Speech").font(.caption).foregroundStyle(.secondary) }
+                } else {
+                    Text(player.isWaitingForAudio(transcript, settings: settings) ? (["failed", "preparationFailed"].contains(transcript.synthesisState) ? "AI audio unavailable · Retry above" : "Waiting for AI audio…") : settings.speechService == .openRouter ? "OpenRouter Text to Speech" : "Apple Text to Speech")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
             }.frame(maxWidth: .infinity)
             Button { player.changeSpeed() } label: { Text(String(format: "%g×", player.speed)).font(.headline).frame(minWidth: 44, minHeight: 44) }.disabled(AudioStore.localURL(transcript.id) == nil).accessibilityLabel("Playback Speed")
         }.buttonStyle(.plain).padding(8).background(.regularMaterial, in: Capsule())
@@ -226,22 +217,11 @@ struct PlaybackBar: View {
 }
 
 private struct AudioDownloadStatus: View {
-    @Environment(\.accentTheme) private var theme
     let transcript: Transcript
     @Environment(AppStore.self) private var store
     var body: some View {
-        if AudioStore.localURL(transcript.id) == nil {
-            if store.downloading.contains(transcript.id) {
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack {
-                        Text(transcript.remoteAudioURL == nil ? "Finding Episode Audio…" : "Downloading Audio…")
-                        Spacer()
-                        if let fraction = store.downloadProgress[transcript.id] { Text(fraction, format: .percent.precision(.fractionLength(0))).monospacedDigit() }
-                    }.font(.footnote)
-                    ProgressView(value: store.downloadProgress[transcript.id]).tint(theme.color).accessibilityLabel("Audio Download")
-                    Text("Keep reading or practice with text to speech.").font(.caption).foregroundStyle(.secondary)
-                }.downloadCard()
-            } else if let error = store.audioErrors[transcript.id] {
+        if AudioStore.localURL(transcript.id) == nil && !store.downloading.contains(transcript.id) {
+            if let error = store.audioErrors[transcript.id] {
                 VStack(alignment: .leading, spacing: 6) {
                     Label("Audio Download Failed", systemImage: "exclamationmark.arrow.circlepath").font(.subheadline.weight(.semibold))
                     Text(error).font(.footnote).foregroundStyle(.secondary)

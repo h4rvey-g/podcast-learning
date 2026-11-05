@@ -88,21 +88,20 @@ struct LibraryView: View {
             VStack(alignment: .leading, spacing: 5) {
                 Text(transcript.title).font(.headline).lineLimit(2)
                 Text("\(transcript.author) · " + (transcript.analysisState == "pending" ? "\(transcript.orderedSegments.count) segments" : "\(transcript.activeItems.count) words")).font(.footnote).foregroundStyle(.secondary)
-                HStack {
-                    if transcript.transcriptionState == "pending" { Label("Transcribing audio…", systemImage: "waveform").foregroundStyle(.secondary) }
-                else if transcript.transcriptionState == "failed" { Label("Transcription interrupted · Retry", systemImage: "arrow.clockwise").foregroundStyle(.red) }
-                else if transcript.synthesisState == "preparing" { Label("Preparing document…", systemImage: "sparkles").foregroundStyle(.secondary) }
-                else if transcript.synthesisState == "preparationFailed" { Label("Document processing interrupted · Retry", systemImage: "arrow.clockwise").foregroundStyle(.red) }
-                else if transcript.synthesisState == "pending" { Label("Generating audio…", systemImage: "waveform").foregroundStyle(.secondary) }
-                else if transcript.synthesisState == "failed" { Label("Audio generation interrupted · Retry", systemImage: "arrow.clockwise").foregroundStyle(.red) }
-                else if transcript.analysisState == "pending" { Label("Finding key sentences…", systemImage: "sparkles").foregroundStyle(Palette.ai) }
-                    else if transcript.analysisState == "aiFailed" { Label("AI analysis failed · Retry", systemImage: "arrow.clockwise").foregroundStyle(.red) }
-                    else { Label(transcript.activeItems.isEmpty ? "Ready to read" : mastered == transcript.activeItems.count ? "All mastered" : "\(transcript.activeItems.count - mastered) to practice", systemImage: mastered == transcript.activeItems.count && mastered > 0 ? "checkmark.circle" : "pencil")
-                        .foregroundStyle(mastered > 0 && mastered == transcript.activeItems.count ? .green : .secondary)
-                    }
-                    Spacer(minLength: 0)
-                    if transcript.analysisState != "pending" && !transcript.activeItems.isEmpty { ProgressView(value: Double(mastered), total: Double(transcript.activeItems.count)).tint(.secondary).frame(width: 64) }
-                }.font(.footnote)
+                if store.importProgress(transcript) == nil {
+                    HStack {
+                        if transcript.transcriptionState == "failed" { Label("Transcription interrupted · Retry", systemImage: "arrow.clockwise").foregroundStyle(.red) }
+                        else if transcript.synthesisState == "preparationFailed" { Label("Document processing interrupted · Retry", systemImage: "arrow.clockwise").foregroundStyle(.red) }
+                        else if transcript.synthesisState == "failed" { Label("Audio generation interrupted · Retry", systemImage: "arrow.clockwise").foregroundStyle(.red) }
+                        else if transcript.analysisState == "aiFailed" { Label("AI analysis failed · Retry", systemImage: "arrow.clockwise").foregroundStyle(.red) }
+                        else { Label(transcript.activeItems.isEmpty ? "Ready to read" : mastered == transcript.activeItems.count ? "All mastered" : "\(transcript.activeItems.count - mastered) to practice", systemImage: mastered == transcript.activeItems.count && mastered > 0 ? "checkmark.circle" : "pencil")
+                            .foregroundStyle(mastered > 0 && mastered == transcript.activeItems.count ? .green : .secondary)
+                        }
+                        Spacer(minLength: 0)
+                        if !transcript.activeItems.isEmpty { ProgressView(value: Double(mastered), total: Double(transcript.activeItems.count)).tint(.secondary).frame(width: 64) }
+                    }.font(.footnote)
+                }
+                ImportProgressView(transcript: transcript)
             }.frame(maxWidth: .infinity, alignment: .leading)
         }.padding(12).background(Palette.cell, in: RoundedRectangle(cornerRadius: 22))
     }

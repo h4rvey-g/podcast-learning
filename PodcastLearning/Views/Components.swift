@@ -14,6 +14,29 @@ enum Palette {
     static func source(_ source: ItemSource) -> Color { source == .list ? list : source == .ai ? ai : manual }
 }
 
+struct ImportProgressView: View {
+    let transcript: Transcript
+    @Environment(AppStore.self) private var store
+    @Environment(\.accentTheme) private var theme
+    var body: some View {
+        if let progress = store.importProgress(transcript) {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 8) {
+                    if progress.fraction == nil { ProgressView().controlSize(.small).accessibilityHidden(true) }
+                    Text(progress.title).frame(maxWidth: .infinity, alignment: .leading)
+                    if let fraction = progress.fraction {
+                        Text(fraction, format: .percent.precision(.fractionLength(0))).monospacedDigit()
+                    }
+                }.font(.footnote).foregroundStyle(.secondary)
+                if let fraction = progress.fraction {
+                    ProgressView(value: fraction).tint(theme.color)
+                        .accessibilityLabel(progress.title)
+                }
+            }.accessibilityElement(children: .combine)
+        }
+    }
+}
+
 struct PrimaryButton: View {
     @Environment(\.accentTheme) private var theme
     let title: String

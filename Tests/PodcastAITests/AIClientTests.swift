@@ -464,6 +464,11 @@ private actor ModelCatalogStub {
         case .chat:
             let messages = try #require(body["messages"] as? [[String: Any]])
             #expect(messages.last?["content"] as? String == input)
+            let prompt = try #require(messages.first?["content"] as? String)
+            #expect(prompt.contains("1–3 complete sentences"))
+            #expect(prompt.contains("50–120 words"))
+            #expect(prompt.contains("one array entry per practice paragraph"))
+            #expect(prompt.contains("no blank lines"))
             let format = body["response_format"] as? [String: Any]
             #expect(format?["type"] as? String == "json_schema")
             schema = (format?["json_schema"] as? [String: Any])?["schema"] as? [String: Any]
@@ -506,4 +511,18 @@ private actor ModelCatalogStub {
     let client = try AIClient(baseURL: "https://provider.example/v1", model: "test", key: "key", fetch: { try await stub.fetch($0) })
     await #expect(throws: ImportError.self) { try await client.cleanText(" \n ") }
     #expect(await stub.snapshot().isEmpty)
+}
+
+@MainActor @Test func cleanupJSONPiecesBecomeReaderAndSpeechParagraphsWithoutLocalResegmentation() async throws {
+    let pieces = ["A heading", "First sentence. Second sentence. Third sentence.", "The next topic starts here."]
+    let output = String(decoding: try JSONEncoder().encode(["pieces": pieces]), as: UTF8.self)
+    let stub = ProviderStub(text: output)
+    let client = try AIClient(baseURL: "https://provider.example/v1", model: "test", key: "test-key", fetch: { try await stub.fetch($0) })
+    let cleaned = try await client.cleanText("A heading\nFirst sentence. Second sentence. Third sentence. The next topic starts here.")
+    let transcript = Transcript(title: "AI-planned paragraphs")
+    try DocumentTextImporter.applyCleanedPieces(cleaned, to: transcript)
+    #expect(transcript.orderedSegments.map(\.text) == pieces)
+    #expect(transcript.orderedSegments.map(\.index) == [0, 1, 2])
+    #expect(transcript.orderedSegments.map { SpeechText.chunks($0.text) } == pieces.map { [$0] })
+    #expect(await stub.snapshot().count == 1)
 }

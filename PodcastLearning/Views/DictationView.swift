@@ -75,6 +75,7 @@ struct DictationView: View {
                     Button { replay(paragraph) } label: {
                         Image(systemName: "play.circle.fill").font(.largeTitle).foregroundStyle(theme.color).frame(width: 44, height: 44)
                     }.buttonStyle(.plain).accessibilityLabel("Replay Paragraph")
+                        .disabled(player.isWaitingForAudio(transcript, settings: settings))
                     VStack(alignment: .leading, spacing: 0) {
                         Waveform(progress: player.progress(in: paragraph.segment), seek: player.canSeek(paragraph, in: transcript) ? { fraction in player.seek(to: fraction, in: paragraph, transcript: transcript, settings: settings) } : nil)
                         Text(audioLabel(paragraph)).font(.caption).foregroundStyle(.secondary)
@@ -179,6 +180,7 @@ struct DictationView: View {
         } catch { self.error = error.localizedDescription }
     }
     private func audioLabel(_ paragraph: PracticeParagraph) -> String {
+        if player.isWaitingForAudio(transcript, settings: settings) { return "AI audio not ready · Wait or retry in the reader" }
         if !store.downloading.contains(transcript.id), AudioStore.localURL(transcript.id) != nil, let start = paragraph.segment?.start, let end = paragraph.segment?.end { return "Paragraph · \(timestamp(start))–\(timestamp(end))" }
         return "Paragraph · English Text to Speech"
     }

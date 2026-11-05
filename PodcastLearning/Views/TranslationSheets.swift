@@ -101,9 +101,13 @@ struct SentenceSheet: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 HStack {
-                    RoundButton(title: "Play Sentence", symbol: "speaker.wave.2") { player.play(text: sentence.text, settings: settings) }
+                    RoundButton(title: "Play Sentence", symbol: "speaker.wave.2") { player.play(text: sentence.text, transcript: transcript, settings: settings) }
+                        .disabled(player.isWaitingForAudio(transcript, settings: settings))
                     Spacer(); Text("Sentence").font(.headline); Spacer()
                     RoundButton(title: "Close", symbol: "xmark") { dismiss() }
+                }
+                if player.isWaitingForAudio(transcript, settings: settings) {
+                    Text("AI audio is not ready. Wait for generation to finish or retry in the reader.").font(.footnote).foregroundStyle(.secondary)
                 }
                 HighlightedText(sentence: sentence, items: transcript.activeItems)
                 VStack(alignment: .leading, spacing: 10) {
