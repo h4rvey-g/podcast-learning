@@ -70,7 +70,7 @@ def main() -> None:
             "version": version,
             "date": release["publishedAt"],
             "localizedDescription": f"PodLearn {version}. Unsigned build; SideStore re-signs it with your Apple ID.",
-            "downloadURL": "https://wget.la/" + ipa["downloadUrl"],
+            "downloadURL": "https://ghfast.top/" + ipa["downloadUrl"],
             "size": ipa["size"],
             "minOSVersion": min_os,
         })
