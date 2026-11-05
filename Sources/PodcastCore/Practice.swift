@@ -240,6 +240,11 @@ public struct DictationSession: Codable, Equatable, Sendable {
     public var wordCount: Int { paragraphs.reduce(0) { $0 + $1.count } }
     public var answeredCount: Int { min(grades.count, wordCount) }
     public var isFinished: Bool { answeredCount >= wordCount }
+    public func filtered(to itemIDs: Set<UUID>) -> Self {
+        let paragraphs = paragraphs.map { $0.filter { itemIDs.contains($0) } }.filter { !$0.isEmpty }
+        let remaining = Set(paragraphs.flatMap { $0 })
+        return Self(paragraphs: paragraphs, grades: grades.filter { remaining.contains($0.key) }, startedAt: startedAt)
+    }
 }
 
 public enum DictationSessionStore {

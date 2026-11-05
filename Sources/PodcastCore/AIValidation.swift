@@ -4,6 +4,9 @@ public struct AIAnalysis: Codable, Sendable {
     public var keySentences: [KeySentence]
     public var extraItems: [ExtraItem]
     public var glosses: [Gloss]
+    public init(keySentences: [KeySentence], extraItems: [ExtraItem], glosses: [Gloss]) {
+        self.keySentences = keySentences; self.extraItems = extraItems; self.glosses = glosses
+    }
     public struct KeySentence: Codable, Sendable { public let sentenceId: Int; public let noteZh: String }
     public struct ExtraItem: Codable, Sendable {
         public let text: String

@@ -12,7 +12,8 @@ private func response(_ status: Int, headers: [String: String] = [:]) -> HTTPURL
     for _ in 0..<2 { try await limiter.acquire(); await limiter.complete(response(200)) }
     #expect(await limiter.concurrency == 3)
     try await limiter.acquire()
-    let now = Date(), reset = now.addingTimeInterval(0.2)
+    // Whole Unix seconds survive the header round trip without submicrosecond Date rounding.
+    let now = Date(), reset = Date(timeIntervalSince1970: ceil(now.timeIntervalSince1970))
     #expect(await limiter.complete(response(429, headers: ["Retry-After": "0.01", "X-RateLimit-Remaining": "0",
         "X-RateLimit-Reset": String(reset.timeIntervalSince1970)]), now: now))
     #expect(await limiter.concurrency == 1)

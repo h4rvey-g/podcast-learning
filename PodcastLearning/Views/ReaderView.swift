@@ -35,11 +35,19 @@ struct ReaderView: View {
             if tab == 0 {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 14) {
-                        Text("List").underline().foregroundStyle(Palette.list)
-                        Text("AI*").customAttribute(WavyUnderline()).foregroundStyle(Palette.ai).textRenderer(SourceUnderlineRenderer())
-                        Text("Manual+").underline(true, pattern: .dot).foregroundStyle(Palette.manual)
-                        HStack(spacing: 4) { Capsule().fill(.yellow).frame(width: 3, height: 14); Text("Key sentence").foregroundStyle(.secondary) }
+                        ForEach(ItemSource.allCases, id: \.rawValue) { source in sourceToggle(source) }
+                        Toggle(isOn: $transcript.showKeySentences) {
+                            HStack(spacing: 4) {
+                                Image(systemName: transcript.showKeySentences ? "checkmark.circle.fill" : "circle")
+                                Capsule().fill(.yellow).frame(width: 3, height: 14)
+                                Text("Key sentence")
+                            }.foregroundStyle(.primary).frame(minHeight: 44)
+                        }.toggleStyle(.button).tint(.secondary)
+                            .accessibilityLabel("Key sentence highlights")
                     }.font(.footnote).padding(.horizontal, 20).padding(.vertical, 2)
+                }
+                if transcript.practiceItems.isEmpty && !transcript.activeItems.isEmpty {
+                    Text("Turn on a word source to include it in dictation.").font(.footnote).foregroundStyle(.secondary).padding(.horizontal, 20)
                 }
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 24) {
@@ -62,14 +70,14 @@ struct ReaderView: View {
                                 }.buttonStyle(.plain).accessibilityLabel("\(player.isActive(segment, in: transcript) ? "Pause" : "Play") \(segment.speaker ?? "paragraph")")
                                     .disabled(player.isWaitingForAudio(transcript, settings: settings))
                                 ForEach(segment.orderedSentences) { sentence in
-                                    HighlightedText(sentence: sentence, items: transcript.activeItems) { word in
+                                    HighlightedText(sentence: sentence, items: transcript.practiceItems) { word in
                                         // A long press already opened the paragraph sheet for this touch.
                                         if selection == nil { selection = .word(word, sentence) }
                                     }
-                                        .padding(sentence.isKey ? 10 : 0)
+                                        .padding(sentence.isKey && transcript.showKeySentences ? 10 : 0)
                                         .frame(maxWidth: .infinity, alignment: .leading)
-                                        .background(sentence.isKey ? Palette.key : .clear, in: RoundedRectangle(cornerRadius: 9))
-                                        .overlay(alignment: .leading) { if sentence.isKey { Capsule().fill(.yellow).frame(width: 3).accessibilityHidden(true) } }
+                                        .background(sentence.isKey && transcript.showKeySentences ? Palette.key : .clear, in: RoundedRectangle(cornerRadius: 9))
+                                        .overlay(alignment: .leading) { if sentence.isKey && transcript.showKeySentences { Capsule().fill(.yellow).frame(width: 3).accessibilityHidden(true) } }
                                         .simultaneousGesture(LongPressGesture().onEnded { _ in selection = .sentence(sentence) })
                                         .accessibilityAction(named: "Translate Sentence") { selection = .sentence(sentence) }
                                 }
@@ -111,8 +119,8 @@ struct ReaderView: View {
                 if transcript.transcriptionState == "none" || transcript.transcriptionState == "done" { AudioDownloadStatus(transcript: transcript) }
                 if tab == 0 && !transcript.orderedSegments.isEmpty { PlaybackBar(transcript: transcript) }
                 PrimaryButton(title: dictationTitle, symbol: "pencil.line") { player.stop(); practice = true }
-                    .disabled(transcript.activeItems.isEmpty || player.isWaitingForAudio(transcript, settings: settings))
-                    .opacity(transcript.activeItems.isEmpty || player.isWaitingForAudio(transcript, settings: settings) ? 0.5 : 1)
+                    .disabled(transcript.practiceItems.isEmpty || player.isWaitingForAudio(transcript, settings: settings))
+                    .opacity(transcript.practiceItems.isEmpty || player.isWaitingForAudio(transcript, settings: settings) ? 0.5 : 1)
             }.padding(.horizontal, 16).padding(.bottom, 8)
         }
         .sheet(item: $selection, onDismiss: { store.save() }) { value in
@@ -130,6 +138,8 @@ struct ReaderView: View {
         } message: {
             Text("Send \(transcript.spokenText.count.formatted()) characters to OpenRouter using \(settings.ttsModel) · \(settings.ttsVoice). Charges may apply. Keep PodLearn open. Completed parts are reused on retry; a lost response may be billed again.")
         }
+        .onChange(of: transcript.excludedSources) { _, _ in loadDictationSession(); store.save() }
+        .onChange(of: transcript.showKeySentences) { _, _ in store.save() }
         .onChange(of: transcript.synthesisState) { _, state in if state == "done" { player.stop() } }
         .fullScreenCover(isPresented: $practice, onDismiss: loadDictationSession) { DictationView(transcript: transcript, includeMastered: includeMastered) }
         .task { loadDictationSession() }
@@ -139,7 +149,27 @@ struct ReaderView: View {
         guard let session = dictationSession, session.answeredCount > 0, !session.isFinished else { return "Start Dictation" }
         return "Continue Dictation (\(session.answeredCount)/\(session.wordCount))"
     }
-    private func loadDictationSession() { dictationSession = DictationSessionStore.load(for: transcript.id) }
+    private func sourceToggle(_ source: ItemSource) -> some View {
+        let included = !transcript.excludedSources.contains(source.rawValue)
+        return Toggle(isOn: Binding(get: { !transcript.excludedSources.contains(source.rawValue) }, set: { isOn in
+            transcript.excludedSources.removeAll { $0 == source.rawValue }
+            if !isOn { transcript.excludedSources.append(source.rawValue) }
+        })) {
+            HStack(spacing: 4) {
+                Image(systemName: included ? "checkmark.circle.fill" : "circle")
+                switch source {
+                case .list: Text("List").underline()
+                case .ai: Text("AI*").customAttribute(WavyUnderline()).textRenderer(SourceUnderlineRenderer())
+                case .manual: Text("Manual+").underline(true, pattern: .dot)
+                }
+            }.foregroundStyle(included ? Palette.source(source) : .secondary).frame(minHeight: 44)
+        }.toggleStyle(.button).tint(Palette.source(source))
+            .accessibilityLabel("\(source.label) words")
+            .accessibilityHint("Show highlights and include these words in dictation")
+    }
+    private func loadDictationSession() {
+        dictationSession = DictationSessionStore.load(for: transcript.id)?.filtered(to: Set(transcript.practiceItems.map(\.id)))
+    }
     @ViewBuilder private var transcriptionStatus: some View {
         if transcript.transcriptionState == "pending" {
             Text("Keep PodLearn open. Temporary network failures retry automatically; downloaded audio and completed results are kept for retry.")

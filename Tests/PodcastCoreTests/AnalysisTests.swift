@@ -158,3 +158,48 @@ func fixture(_ name: String) throws -> Data { try Data(contentsOf: Bundle.module
     #expect(transcript.segment(atSpeechOffset: transcript.spokenText.utf16.count) == nil)
     #expect(transcript.segment(atSpeechOffset: -1) == nil)
 }
+
+@MainActor @Test func readerSourceChoicesPersistWithoutRemovingWordsOrHistory() throws {
+    let container = try testContainer(), context = container.mainContext
+    let transcript = TextImporter.makeTranscript(title: "Filters", paragraphs: ["Music keeps time."])
+    let sentence = transcript.sentences[0]
+    sentence.isKey = true
+    let list = DictationItem(text: "Music", key: "music", sentence: sentence)
+    let ai = DictationItem(text: "keeps time", key: "keep time", source: .ai, sentence: sentence)
+    let manual = DictationItem(text: "time", key: "time", source: .manual, sentence: sentence)
+    transcript.items = [list, ai, manual]
+    let memory = WordMemory(key: "music"); memory.box = 3
+    context.insert(transcript); context.insert(memory)
+    #expect(transcript.excludedSources.isEmpty && transcript.showKeySentences)
+    #expect(transcript.practiceItems.count == 3)
+    transcript.excludedSources = [ItemSource.ai.rawValue]
+    #expect(Set(transcript.practiceItems.map(\.id)) == Set([list.id, manual.id]))
+    #expect(TextMatch.highlights(in: sentence.text, items: transcript.practiceItems).allSatisfy { $0.item.itemSource != .ai })
+    #expect(Leitner.queue(transcript.practiceItems, memories: [:], includeMastered: true).flatMap(\.items).allSatisfy { $0.itemSource != .ai })
+    transcript.excludedSources = ItemSource.allCases.map(\.rawValue)
+    transcript.showKeySentences = false
+    try context.save()
+    let reopenedContext = ModelContext(container)
+    let reloaded = try #require(reopenedContext.fetch(FetchDescriptor<Transcript>()).first)
+    #expect(reloaded.practiceItems.isEmpty)
+    #expect(!reloaded.showKeySentences)
+    #expect(reloaded.sentences[0].isKey)
+    #expect(reloaded.activeItems.count == 3)
+    #expect(reloaded.activeItems.allSatisfy { !$0.isRemoved })
+    #expect(memory.box == 3)
+    reloaded.excludedSources = []
+    #expect(reloaded.practiceItems.count == 3)
+}
+
+@Test func resumedProgressCountsOnlyIncludedWordsAndKeepsTheirGrades() {
+    let list = UUID(), ai = UUID(), manual = UUID(), start = Date(timeIntervalSince1970: 123)
+    let saved = DictationSession(paragraphs: [[list, ai], [manual]], grades: [list: .firstTry, ai: .secondTry], startedAt: start)
+    let filtered = saved.filtered(to: [list, manual])
+    #expect(filtered.paragraphs == [[list], [manual]])
+    #expect(filtered.grades == [list: .firstTry])
+    #expect(filtered.answeredCount == 1 && filtered.wordCount == 2 && !filtered.isFinished)
+    #expect(filtered.startedAt == start)
+    #expect(saved.wordCount == 3 && saved.grades.count == 2)
+    #expect(saved.filtered(to: []).paragraphs.isEmpty)
+    #expect(saved.filtered(to: [list]).isFinished)
+}

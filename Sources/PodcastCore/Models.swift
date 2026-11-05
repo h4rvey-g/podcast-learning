@@ -31,6 +31,8 @@ public enum ItemSource: String, CaseIterable, Sendable {
     public var synthesisState: String = "none"
     public var synthesisError: String?
     public var keepVideo: Bool = false
+    public var excludedSources: [String] = []
+    public var showKeySentences: Bool = true
     public var createdAt: Date = Date()
     @Relationship(deleteRule: .cascade, inverse: \Segment.transcript) public var segments: [Segment]?
     @Relationship(deleteRule: .cascade, inverse: \DictationItem.transcript) public var items: [DictationItem]?
@@ -53,6 +55,7 @@ public enum ItemSource: String, CaseIterable, Sendable {
     }
     public var sentences: [Sentence] { orderedSegments.flatMap(\.orderedSentences) }
     public var activeItems: [DictationItem] { (items ?? []).filter { !$0.isRemoved }.sorted { ($0.sentence?.index ?? 0) < ($1.sentence?.index ?? 0) } }
+    public var practiceItems: [DictationItem] { activeItems.filter { !excludedSources.contains($0.itemSource.rawValue) } }
 }
 
 @Model public final class Segment {

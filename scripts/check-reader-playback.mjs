@@ -50,6 +50,8 @@ enum TextMatch { static func highlights(in text: String, items: [DictationItem])
 @Observable final class Transcript {
     let id = UUID(); var orderedSegments = (0..<30).map { Segment($0) }; var items: [DictationItem] = []
     var activeItems: [DictationItem] { Counters.itemScans += 1; return items }
+    var practiceItems: [DictationItem] { activeItems }
+    var showKeySentences = true
 }
 @Observable final class SettingsStore {}
 @Observable final class ClipPlayer {

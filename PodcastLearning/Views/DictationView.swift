@@ -188,11 +188,11 @@ struct DictationView: View {
     private func setup(includeMastered: Bool) {
         do {
             memories = try Leitner.memories(in: store.context)
-            if let saved = DictationSessionStore.load(for: transcript.id), let resumed = resume(saved) {
+            if let saved = DictationSessionStore.load(for: transcript.id)?.filtered(to: Set(transcript.practiceItems.map(\.id))), !saved.isFinished, let resumed = resume(saved) {
                 queue = resumed.paragraphs; results = resumed.results; index = resumed.index; sessionStartedAt = saved.startedAt
                 attempt.restore(saved.grades)
             } else {
-                queue = Leitner.queue(transcript.activeItems, memories: memories, includeMastered: includeMastered)
+                queue = Leitner.queue(transcript.practiceItems, memories: memories, includeMastered: includeMastered)
                 try store.context.save()
             }
             loaded = true; focusFirstUnfinished()
@@ -200,7 +200,7 @@ struct DictationView: View {
         } catch { self.error = error.localizedDescription }
     }
     private func resume(_ saved: DictationSession) -> (paragraphs: [PracticeParagraph], results: [PracticeResult], index: Int)? {
-        let items = Dictionary(transcript.activeItems.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let items = Dictionary(transcript.practiceItems.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         let paragraphs = saved.paragraphs.compactMap { ids -> PracticeParagraph? in
             let found = ids.compactMap { items[$0] }
             return found.isEmpty ? nil : PracticeParagraph(items: found)
