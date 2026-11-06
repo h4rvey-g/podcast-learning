@@ -127,6 +127,9 @@ public struct ITunesResponse: Decodable, Sendable {
     public let results: [Entry]
     public struct Entry: Decodable, Sendable {
         public let trackId: Int64?
+        public let trackName: String?
+        public let collectionName: String?
+        public let artworkUrl600: String?
         public let episodeUrl: String?
         public let episodeGuid: String?
         public let feedUrl: String?
@@ -141,6 +144,20 @@ public struct EpisodeAudio: Sendable {
 
 public enum AudioResolver {
     @MainActor public static func preview(_ link: EpisodeLink, session: URLSession = .shared) async throws -> Transcript {
+        let lookup = try? await Self.lookup(link, session: session)
+        try Task.checkCancellation()
+        if let episode = lookup?.results.first(where: { String($0.trackId ?? 0) == link.episodeID }),
+           let title = episode.trackName?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty,
+           let value = episode.episodeUrl, let audio = URL(string: value), audio.scheme == "https",
+           audio.host != nil, audio.user == nil, audio.password == nil {
+            let show = lookup?.results.first { String($0.trackId ?? 0) == link.showID }
+            let transcript = Transcript(title: title, author: episode.collectionName ?? show?.trackName ?? "")
+            transcript.episodeID = link.episodeID; transcript.sourceURL = link.url.absoluteString
+            transcript.remoteAudioURL = audio.absoluteString
+            transcript.audioDuration = episode.trackTimeMillis.flatMap { $0.isFinite && $0 > 0 ? $0 / 1000 : nil }
+            transcript.coverURL = episode.artworkUrl600 ?? show?.artworkUrl600
+            return transcript
+        }
         let data = try await HTTP.data(for: URLRequest(url: link.url), session: session)
         guard let html = String(data: data, encoding: .utf8) else { throw ImportError.invalidResponse }
         // shortcut: reads Apple's public episode payload; update this parser if its page format changes.
@@ -184,9 +201,12 @@ public enum AudioResolver {
         if let guid, let match = items.first(where: { $0.guid.trimmingCharacters(in: .whitespacesAndNewlines) == guid }) { return match.audioURL }
         return items.first { normalizedTitle($0.title) == normalizedTitle(title) }?.audioURL
     }
-    public static func resolve(_ link: EpisodeLink, title: String, session: URLSession = .shared) async throws -> EpisodeAudio? {
+    private static func lookup(_ link: EpisodeLink, session: URLSession) async throws -> ITunesResponse {
         let url = URL(string: "https://itunes.apple.com/lookup?id=\(link.showID)&entity=podcastEpisode&limit=200")!
-        let lookup = try JSONDecoder().decode(ITunesResponse.self, from: await HTTP.data(for: URLRequest(url: url), session: session))
+        return try JSONDecoder().decode(ITunesResponse.self, from: await HTTP.data(for: URLRequest(url: url), session: session))
+    }
+    public static func resolve(_ link: EpisodeLink, title: String, session: URLSession = .shared) async throws -> EpisodeAudio? {
+        let lookup = try await Self.lookup(link, session: session)
         let episode = lookup.results.first { String($0.trackId ?? 0) == link.episodeID }
         let duration = episode?.trackTimeMillis.flatMap { $0.isFinite && $0 > 0 ? $0 / 1000 : nil }
         if let value = episode?.episodeUrl, let url = URL(string: value), url.scheme == "https" { return EpisodeAudio(url: url, duration: duration) }

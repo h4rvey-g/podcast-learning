@@ -1,0 +1,23 @@
+{
+  "resultCount": 2,
+  "results": [
+    {
+      "trackId": 1483304964,
+      "trackName": "» Divine Intervention Podcasts",
+      "collectionName": "» Divine Intervention Podcasts",
+      "artistName": "Divine-Favour Anene",
+      "feedUrl": "https://divineinterventionpodcasts.com/category/podcast/feed/",
+      "trackTimeMillis": 378,
+      "artworkUrl600": "https://is1-ssl.mzstatic.com/image/thumb/Podcasts211/v4/db/2f/2d/db2f2d87-c853-00d7-eec9-fc2b96436049/mza_17274053337058593295.jpg/600x600bb.jpg"
+    },
+    {
+      "trackId": 1000799601935,
+      "trackName": "DIP Ep 678: The Extremely Clutch USPSTF Podcast (Part 2)",
+      "collectionName": "» Divine Intervention Podcasts",
+      "episodeUrl": "https://public-api.wordpress.com/wpcom/v2/sites/144053210/podcast-play/71578.mp3",
+      "feedUrl": "https://divineinterventionpodcasts.com/category/podcast/feed/",
+      "trackTimeMillis": 2122000,
+      "artworkUrl600": "https://is1-ssl.mzstatic.com/image/thumb/Podcasts211/v4/db/2f/2d/db2f2d87-c853-00d7-eec9-fc2b96436049/mza_17274053337058593295.jpg/600x600bb.jpg"
+    }
+  ]
+}
