@@ -13,6 +13,8 @@ struct InlineParagraphEditor: UIViewRepresentable {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.colorSchemeContrast) private var contrast
     @Environment(\.accentTheme) private var theme
+    let selectWord: (String, Sentence) -> Void
+    let selectSentence: (Sentence) -> Void
 
     struct Snapshot: Equatable {
         let text: String
@@ -41,7 +43,13 @@ struct InlineParagraphEditor: UIViewRepresentable {
         view.spellCheckingType = .no; view.smartQuotesType = .no; view.smartDashesType = .no
         view.returnKeyType = .done
         view.accessibilityLabel = "Dictation paragraph"
-        view.accessibilityHint = "Tap a blank to type directly in the paragraph. On the second try, given letters are fixed."
+        view.accessibilityHint = "Tap a blank to type or a visible word to translate. Long-press a sentence to translate it. On the second try, given letters are fixed."
+        let tap = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.tapped(_:)))
+        let press = UILongPressGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.longPressed(_:)))
+        tap.delegate = context.coordinator; press.delegate = context.coordinator
+        tap.require(toFail: press)
+        tap.cancelsTouchesInView = false; press.cancelsTouchesInView = false
+        view.addGestureRecognizer(tap); view.addGestureRecognizer(press)
         return view
     }
     func updateUIView(_ view: UITextView, context: Context) {
@@ -62,7 +70,7 @@ struct InlineParagraphEditor: UIViewRepresentable {
         return CGSize(width: width, height: ceil(uiView.sizeThatFits(CGSize(width: width, height: .greatestFiniteMagnitude)).height))
     }
 
-    final class Coordinator: NSObject, UITextViewDelegate {
+    final class Coordinator: NSObject, UITextViewDelegate, UIGestureRecognizerDelegate {
         struct Region {
             let id: UUID
             let occurrence: Int
@@ -71,11 +79,14 @@ struct InlineParagraphEditor: UIViewRepresentable {
             let placeholder: Bool
         }
         struct Target: Equatable { let id: UUID; let occurrence: Int; let letter: Int?; var offset = 0; var length = 0 }
+        struct TranslationRun { let display: NSRange; let source: NSRange; let itemID: UUID? }
         var parent: InlineParagraphEditor
         var requestedFocus: UUID?
         var target: Target?
         var lastRender: Snapshot?
         private var regions: [Region] = []
+        private var protectedRanges: [NSRange] = []
+        private var translationRuns: [TranslationRun] = []
         private var rendering = false
         init(_ parent: InlineParagraphEditor) { self.parent = parent }
 
@@ -103,15 +114,25 @@ struct InlineParagraphEditor: UIViewRepresentable {
                 target = Target(id: id, occurrence: occurrence, letter: letter, offset: (parent.inputs[id] ?? "").utf16.count)
             }
             regions = []
+            protectedRanges = []
+            translationRuns = []
+            let source = parent.paragraph.text as NSString
+            var sourceCursor = 0
             for (occurrence, part) in parts.enumerated() {
+                let sourceRange = source.range(of: part.text, range: NSRange(location: sourceCursor, length: source.length - sourceCursor))
+                if sourceRange.location != NSNotFound { sourceCursor = NSMaxRange(sourceRange) }
                 guard let item = part.item else {
+                    let location = result.length
                     let text = NSMutableAttributedString(string: part.text, attributes: base)
                     for match in TextMatch.highlights(in: part.text, items: parent.paragraph.items.filter { completed.contains($0.id) }) {
                         text.addAttributes([.foregroundColor: parent.attempt.grade(match.item.id) == .revealed ? UIColor.systemRed : UIColor.systemGreen, .font: strong], range: NSRange(match.range, in: part.text))
                     }
-                    result.append(text); speech.append(part.text); continue
+                    result.append(text); speech.append(part.text)
+                    if sourceRange.location != NSNotFound { translationRuns.append(TranslationRun(display: NSRange(location: location, length: text.length), source: sourceRange, itemID: nil)) }
+                    continue
                 }
                 let number = (parent.paragraph.items.firstIndex { $0.id == item.id } ?? 0) + 1
+                let location = result.length
                 if parent.attempt.phase(item.id) == .second {
                     let retry = parent.retries[item.id] ?? RetryLetters(answer: item.text)
                     speech.append("blank \(number): " + retry.letters.map { $0.isEmpty ? "blank" : $0 }.joined(separator: " "))
@@ -130,7 +151,13 @@ struct InlineParagraphEditor: UIViewRepresentable {
                     regions.append(Region(id: item.id, occurrence: occurrence, letter: nil, range: range, placeholder: placeholder))
                     speech.append("blank \(number): " + (placeholder ? "empty" : value))
                 }
+                if sourceRange.location != NSNotFound {
+                    let displayRange = NSRange(location: location, length: result.length - location)
+                    protectedRanges.append(displayRange)
+                    translationRuns.append(TranslationRun(display: displayRange, source: sourceRange, itemID: item.id))
+                }
             }
+            assert(translationRuns.allSatisfy { NSMaxRange($0.display) <= result.length && NSMaxRange($0.source) <= source.length })
             view.attributedText = result; view.isEditable = !regions.isEmpty
             view.accessibilityValue = speech.joined()
             if !regions.contains(where: matchesTarget), let id = parent.focused {
@@ -156,6 +183,44 @@ struct InlineParagraphEditor: UIViewRepresentable {
             view.invalidateIntrinsicContentSize()
         }
         private func matchesTarget(_ region: Region) -> Bool { region.id == target?.id && region.occurrence == target?.occurrence && region.letter == target?.letter }
+        @objc func tapped(_ gesture: UITapGestureRecognizer) {
+            guard let view = gesture.view as? UITextView, let location = textLocation(at: gesture.location(in: view), in: view),
+                  !protectedRanges.contains(where: { NSLocationInRange(location, $0) }),
+                  let wordRange = view.tokenizer.rangeEnclosingPosition(position(at: location, in: view), with: .word, inDirection: UITextDirection(rawValue: UITextStorageDirection.forward.rawValue)),
+                  let word = view.text(in: wordRange), !word.isEmpty else { return }
+            let wordStart = view.offset(from: view.beginningOfDocument, to: wordRange.start)
+            guard let run = translationRuns.first(where: { NSLocationInRange(wordStart, $0.display) && $0.itemID == nil }),
+                  let sentence = sentence(at: run.source.location + wordStart - run.display.location) else { return }
+            setFocus(nil); view.resignFirstResponder(); parent.selectWord(word, sentence)
+        }
+        @objc func longPressed(_ gesture: UILongPressGestureRecognizer) {
+            guard gesture.state == .began, let view = gesture.view as? UITextView,
+                  let location = textLocation(at: gesture.location(in: view), in: view),
+                  let run = translationRuns.first(where: { NSLocationInRange(location, $0.display) }),
+                  let sentence = run.itemID.flatMap({ id in parent.paragraph.items.first { $0.id == id }?.sentence })
+                    ?? sentence(at: run.source.location + location - run.display.location) else { return }
+            setFocus(nil); view.resignFirstResponder(); parent.selectSentence(sentence)
+        }
+        private func position(at offset: Int, in view: UITextView) -> UITextPosition {
+            view.position(from: view.beginningOfDocument, offset: offset) ?? view.beginningOfDocument
+        }
+        private func textLocation(at point: CGPoint, in view: UITextView) -> Int? {
+            guard let position = view.closestPosition(to: point) else { return nil }
+            return view.offset(from: view.beginningOfDocument, to: position)
+        }
+        private func sentence(at sourceOffset: Int) -> Sentence? {
+            let source = parent.paragraph.text as NSString
+            let sentences = parent.paragraph.segment?.orderedSentences ?? parent.paragraph.items.compactMap(\.sentence).sorted { $0.index < $1.index }
+            var cursor = 0
+            for sentence in sentences {
+                let range = source.range(of: sentence.text, range: NSRange(location: cursor, length: source.length - cursor))
+                guard range.location != NSNotFound else { continue }
+                if NSLocationInRange(sourceOffset, range) { return sentence }
+                cursor = NSMaxRange(range)
+            }
+            return nil
+        }
+        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool { true }
         private func setFocus(_ id: UUID?) { requestedFocus = id; parent.focused = id }
         func textViewDidBeginEditing(_ textView: UITextView) {
             if target == nil, let region = regions.first { target = Target(id: region.id, occurrence: region.occurrence, letter: region.letter) }

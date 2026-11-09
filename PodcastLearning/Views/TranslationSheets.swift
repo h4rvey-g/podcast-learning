@@ -7,7 +7,7 @@ struct WordSheet: View {
     let word: String
     let sentence: Sentence
     let transcript: Transcript
-    let showInItems: (DictationItem) -> Void
+    var showInItems: ((DictationItem) -> Void)? = nil
     @Environment(AppStore.self) private var store
     @Environment(SettingsStore.self) private var settings
     @Environment(ClipPlayer.self) private var player
@@ -59,9 +59,11 @@ struct WordSheet: View {
                     Label(item?.isRemoved == false ? "Remove" : "Add to Dictation", systemImage: item?.isRemoved == false ? "xmark" : "plus")
                         .frame(maxWidth: .infinity).padding(.vertical, 15).background(Color(uiColor: .tertiarySystemFill), in: Capsule())
                 }.foregroundStyle(item?.isRemoved == false ? .red : theme.color)
-                Button { if let item { showInItems(item); dismiss() } } label: {
-                    Label("Show in Items", systemImage: "list.bullet").frame(maxWidth: .infinity).padding(.vertical, 15).background(Color(uiColor: .tertiarySystemFill), in: Capsule())
-                }.foregroundStyle(.primary).disabled(item == nil)
+                if let showInItems {
+                    Button { if let item { showInItems(item); dismiss() } } label: {
+                        Label("Show in Items", systemImage: "list.bullet").frame(maxWidth: .infinity).padding(.vertical, 15).background(Color(uiColor: .tertiarySystemFill), in: Capsule())
+                    }.foregroundStyle(.primary).disabled(item == nil)
+                }
             }.font(.headline).buttonStyle(.plain).padding(20)
         }
         .task {

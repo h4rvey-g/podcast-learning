@@ -1,6 +1,17 @@
 import SwiftUI
 import PodcastCore
 
+private enum DictationTranslation: Identifiable {
+    case word(String, Sentence)
+    case sentence(Sentence)
+    var id: String {
+        switch self {
+        case .word(let word, let sentence): sentence.id.uuidString + word
+        case .sentence(let sentence): sentence.id.uuidString
+        }
+    }
+}
+
 struct DictationView: View {
     @Environment(\.accentTheme) private var theme
     let transcript: Transcript
@@ -22,6 +33,7 @@ struct DictationView: View {
     @State private var exitConfirmation = false
     @State private var error: String?
     @State private var focused: UUID?
+    @State private var translation: DictationTranslation?
     private var current: PracticeParagraph? { queue.indices.contains(index) ? queue[index] : nil }
     private var answered: Bool { current?.items.allSatisfy { attempt.grade($0.id) != nil } ?? false }
     private var secondTry: Bool { current?.items.contains { attempt.phase($0.id) == .second } ?? false }
@@ -57,6 +69,12 @@ struct DictationView: View {
                 .confirmationDialog("End this session? Your answers are saved so you can continue later.", isPresented: $exitConfirmation, titleVisibility: .visible) { Button("End Session", role: .destructive) { dismiss() }; Button("Keep Practicing", role: .cancel) {} }
                 .alert("Could Not Save Review", isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) { Button("Close", role: .cancel) { error = nil } } message: { Text(error ?? "") }
         }
+        .sheet(item: $translation, onDismiss: { store.save() }) { selection in
+            switch selection {
+            case .word(let word, let sentence): WordSheet(word: word, sentence: sentence, transcript: transcript)
+            case .sentence(let sentence): SentenceSheet(sentence: sentence, transcript: transcript)
+            }
+        }
         .task { if !loaded { setup(includeMastered: includeMastered) } }
         .onDisappear { player.stop() }
     }
@@ -82,7 +100,11 @@ struct DictationView: View {
                     }
                 }.card()
                     .alert("Playback Failed", isPresented: Binding(get: { player.error != nil }, set: { if !$0 { player.error = nil } })) { Button("Close", role: .cancel) { player.error = nil } } message: { Text(player.error ?? "") }
-                InlineParagraphEditor(paragraph: paragraph, attempt: attempt, inputs: $inputs, retries: $retries, focused: $focused) { advanceFocus(after: $0) }.card()
+                InlineParagraphEditor(paragraph: paragraph, attempt: attempt, inputs: $inputs, retries: $retries, focused: $focused, advance: { advanceFocus(after: $0) }, selectWord: { word, sentence in
+                    translation = .word(word, sentence)
+                }, selectSentence: { sentence in
+                    translation = .sentence(sentence)
+                }).card()
                 if answered { ForEach(paragraph.items) { answerFeedback($0) } }
                 if !answered {
                     Text(secondTry ? "Fill the underscores in the paragraph. Given letters stay fixed." : "Tap a blank and type in the paragraph. Check all blanks together.").font(.footnote).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading)
