@@ -12,7 +12,9 @@ public enum AudioPreparation {
         guard let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16000, channels: 1, interleaved: false),
               let converter = AVAudioConverter(from: input.processingFormat, to: format),
               let inputBuffer = AVAudioPCMBuffer(pcmFormat: input.processingFormat, frameCapacity: 8192),
-              let outputBuffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 8192) else { throw ImportError.invalidResponse }
+              let outputBuffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 8192) else {
+            throw ImportError.service("Could not create the mono 16 kHz WAV converter or its audio buffers.")
+        }
         let temporary = destination.deletingLastPathComponent().appendingPathComponent(UUID().uuidString + ".wav")
         defer { try? FileManager.default.removeItem(at: temporary) }
         do {
@@ -35,7 +37,7 @@ public enum AudioPreparation {
                 }
                 if let readError { throw readError }
                 if let conversionError { throw conversionError }
-                guard status != .error else { throw ImportError.invalidResponse }
+                guard status != .error else { throw ImportError.service("WAV conversion failed while reading the downloaded audio.") }
                 if outputBuffer.frameLength > 0 { try output.write(from: outputBuffer) }
                 ended = status == .endOfStream
             }
@@ -52,10 +54,14 @@ public enum AudioPreparation {
         let input = try AVAudioFile(forReading: wav)
         let rate = input.processingFormat.sampleRate
         let duration = Double(input.length) / rate
-        guard rate == 16000, input.processingFormat.channelCount == 1, duration > 0, duration < 7200 else { throw ImportError.invalidResponse }
+        guard rate == 16000, input.processingFormat.channelCount == 1, duration > 0, duration < 7200 else {
+            throw ImportError.service("Cannot split transcription audio: expected mono 16000 Hz WAV shorter than two hours; got \(rate) Hz, \(input.processingFormat.channelCount) channels, \(duration) seconds.")
+        }
         if duration <= Double(seconds) { return [Chunk(file: wav, offset: 0, duration: duration)] }
         let frames = AVAudioFramePosition(Double(seconds) * rate)
-        guard let buffer = AVAudioPCMBuffer(pcmFormat: input.processingFormat, frameCapacity: 8192) else { throw ImportError.invalidResponse }
+        guard let buffer = AVAudioPCMBuffer(pcmFormat: input.processingFormat, frameCapacity: 8192) else {
+            throw ImportError.service("Could not allocate a buffer for transcription audio splitting.")
+        }
         var chunks: [Chunk] = []
         for start in stride(from: AVAudioFramePosition(0), to: input.length, by: Int(frames)) {
             try Task.checkCancellation()
@@ -70,7 +76,7 @@ public enum AudioPreparation {
                     while input.framePosition < end {
                         try Task.checkCancellation()
                         try input.read(into: buffer, frameCount: AVAudioFrameCount(min(8192, end - input.framePosition)))
-                        guard buffer.frameLength > 0 else { throw ImportError.invalidResponse }
+                        guard buffer.frameLength > 0 else { throw ImportError.service("Transcription audio ended before the expected part boundary.") }
                         try output.write(from: buffer)
                     }
                 }

@@ -269,6 +269,7 @@ import PodcastCore
         }
         transcript.keepVideo = transcript.keepVideo && settings.keepBilibiliVideo
         transcript.transcriptionState = "pending"; transcript.transcriptionError = nil
+        var stage = "Save transcription session"
         do {
             try context.save()
             guard settings.transcriptionConsent else { throw ImportError.service("Enable Audio Transcription in Settings to retry.") }
@@ -276,9 +277,12 @@ import PodcastCore
             let resultFile = directory.appendingPathComponent("result.json")
             let result: MAIResult
             if FileManager.default.fileExists(atPath: resultFile.path) {
-                result = try JSONDecoder().decode(MAIResult.self, from: Data(contentsOf: resultFile))
+                stage = "Read saved transcription result"
+                result = try MAIResult.load(from: resultFile)
             } else {
+                stage = "Check speech provider settings"
                 let client = try MAITranscriber(endpoint: settings.speechEndpoint, key: APIKey.read(account: "azureSpeech"), model: settings.speechModel)
+                stage = "Resolve and download source audio"
                 processingPhase[id] = "download"
                 transcriptionStatus[id] = "Downloading audio…"
                 if let source = transcript.sourceURL, (try? BilibiliLink(source)) != nil { try await downloadBilibili(transcript) }
@@ -286,12 +290,14 @@ import PodcastCore
                 guard transcript.modelContext != nil else { return }
                 let wav = directory.appendingPathComponent("audio.wav")
                 downloadProgress[id] = nil
+                stage = "Prepare WAV audio"
                 processingPhase[id] = "prepare"
                 transcriptionStatus[id] = "Preparing audio…"
-                guard let source = AudioStore.localURL(id) else { throw ImportError.invalidResponse }
+                guard let source = AudioStore.localURL(id) else { throw ImportError.service("Downloaded audio is missing. Retry the audio download.") }
                 try await Task.detached(priority: .utility) { try AudioPreparation.wav(from: source, to: wav) }.value
                 guard transcript.modelContext != nil else { return }
                 guard settings.transcriptionConsent else { throw ImportError.service("Audio transcription was turned off. Your downloaded audio is kept.") }
+                stage = "Speech transcription"
                 processingPhase[id] = "upload"
                 transcriptionStatus[id] = "Uploading audio…"
                 result = try await client.transcribe(wav, resultFile: resultFile) { [weak self] fraction in
@@ -304,8 +310,10 @@ import PodcastCore
                 }
             }
             guard transcript.modelContext != nil else { return }
+            stage = "Apply timed transcript"
             try result.apply(to: transcript)
             marker.mark(transcript, target: CEFR(rawValue: transcript.targetLevelOverride ?? "") ?? settings.level)
+            stage = "Save transcribed text"
             transcript.transcriptionState = "done"
             try context.save()
             // Keep the result until the transcript is durably saved; cleanup never changes success.
@@ -319,7 +327,7 @@ import PodcastCore
                 for segment in transcript.segments ?? [] { context.delete(segment) }
                 transcript.items = []; transcript.segments = []
             }
-            transcript.transcriptionState = "failed"; transcript.transcriptionError = error.localizedDescription
+            transcript.transcriptionState = "failed"; transcript.transcriptionError = "\(stage): \(error.localizedDescription)"
             save()
         }
     }

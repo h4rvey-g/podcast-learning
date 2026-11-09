@@ -54,7 +54,10 @@ public enum ReliableTransfer {
                 let file = try response.result.get()
                 let mime = response.response?.mimeType ?? ""
                 let size = try file.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
-                guard size > 0, !mime.contains("text"), !mime.contains("json") else { throw ImportError.invalidResponse }
+                guard size > 0 else { throw ImportError.service("Media download returned an empty file.") }
+                guard !mime.contains("text"), !mime.contains("json") else {
+                    throw ImportError.service("Media download returned text/JSON instead of audio/video (HTTP \(response.response?.statusCode ?? 0)). The source may require sign-in or the media link may have expired.")
+                }
                 try commit(file, to: destination)
                 return
             } catch {

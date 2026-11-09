@@ -126,9 +126,18 @@ private final class TransferStub: URLProtocol, @unchecked Sendable {
             client?.urlProtocol(self, didLoad: Data(repeating: 42, count: 65536))
             client?.urlProtocolDidFinishLoading(self); return
         }
+        if mode == "diagnosticEmpty" { json = #"{"durationMilliseconds":3000,"phrases":[]}"# }
+        if mode == "diagnosticTiming" { json = json.replacingOccurrences(of: #""start":0,"#, with: #""start":-1,"#) }
+        if mode == "diagnosticMissing" { json = #"{"phrases":[]}"# }
+        if mode == "diagnosticType" { json = #"{"durationMilliseconds":3000,"phrases":"private transcript test-key"}"# }
+        if mode == "diagnosticJSON" { json = #"{"phrases":["# }
+        if mode == "diagnosticNull" { json = #"{"durationMilliseconds":null,"phrases":[]}"# }
+        if mode == "diagnosticEmptyBody" { json = "" }
+        if mode == "diagnosticHTML" { json = "<html>private transcript test-key</html>" }
+        if mode == "diagnosticAuth" { status = 401; json = #"{"error":{"message":"private transcript test-key"}}"# }
         let target = mode == "localizedShortLink" ? "https://www.bilibili.com/zh-Hans/video/BV1ScHK6pEku?p=2" : "https://www.bilibili.com/video/BV1xx411c7mD?p=2"
         let responseURL = request.url!.host == "b23.tv" ? URL(string: target)! : request.url!
-        let response = HTTPURLResponse(url: responseURL, statusCode: status, httpVersion: nil, headerFields: ["Content-Type":"application/json", "Retry-After":"0"])!
+        let response = HTTPURLResponse(url: responseURL, statusCode: status, httpVersion: nil, headerFields: ["Content-Type": mode == "diagnosticHTML" ? "text/html" : "application/json", "Retry-After":"0"])!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: Data(json.utf8)); client?.urlProtocolDidFinishLoading(self)
     }
@@ -192,7 +201,12 @@ private final class UploadMonitor: EventMonitor, @unchecked Sendable {
         let good = try Data(contentsOf: file)
         #expect(good.count == 65536)
         TransferStub.reset("html")
-        await #expect(throws: (any Error).self) { try await ReliableTransfer.download(urls, to: file, session: session) }
+        do {
+            try await ReliableTransfer.download(urls, to: file, session: session)
+            Issue.record("Non-media response was accepted")
+        } catch {
+            #expect(error.localizedDescription.contains("text/JSON instead of audio/video (HTTP 200)"))
+        }
         #expect(try Data(contentsOf: file) == good)
         #expect(try FileManager.default.contentsOfDirectory(atPath: directory.path) == ["audio.mp3"])
     }
@@ -240,6 +254,67 @@ private final class UploadMonitor: EventMonitor, @unchecked Sendable {
         for url in ["https://openrouter.ai", "https://openrouter.ai/api/v1/audio/transcriptions", "https://openrouter.ai.evil.test/api/v1"] {
             #expect(throws: ImportError.self) { try MAITranscriber(endpoint: url, key: "test-key", session: session) }
         }
+    }
+    @Test(arguments: ["diagnosticEmpty", "diagnosticTiming", "diagnosticMissing", "diagnosticType", "diagnosticJSON", "diagnosticHTML", "diagnosticAuth", "diagnosticNull", "diagnosticEmptyBody"])
+    func transcriptionFailuresExplainTheBoundaryWithoutExposingContents(mode: String) async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let wav = directory.appendingPathComponent("audio.wav"), result = directory.appendingPathComponent("result.json")
+        try silentWAV(wav, seconds: 2)
+        let router = mode == "diagnosticTiming"
+        let client = try MAITranscriber(endpoint: router ? "https://openrouter.ai/api/v1" : "https://study.cognitiveservices.azure.com",
+                                       key: "test-key", session: session())
+        TransferStub.reset(mode)
+        do {
+            _ = try await client.transcribe(wav, resultFile: result)
+            Issue.record("Invalid response was accepted")
+        } catch {
+            let message = error.localizedDescription
+            #expect(message.contains(router ? "OpenRouter" : "Azure Speech"))
+            #expect(!message.contains("unreadable response"))
+            #expect(!message.contains("private transcript") && !message.contains("test-key"))
+            switch mode {
+            case "diagnosticEmpty": #expect(message.contains("no phrases"))
+            case "diagnosticTiming":
+                #expect(message.contains("part 1/1") && message.contains("phrase 1") && message.contains("-1000"))
+            case "diagnosticMissing": #expect(message.contains("missing field durationMilliseconds"))
+            case "diagnosticType": #expect(message.contains("wrong type at phrases"))
+            case "diagnosticJSON": #expect(message.contains("invalid JSON"))
+            case "diagnosticHTML": #expect(message.contains("HTTP 200") && message.contains("text/html"))
+            case "diagnosticAuth": #expect(message.contains("HTTP 401") && message.contains("key"))
+            case "diagnosticNull": #expect(message.contains("null value at durationMilliseconds"))
+            case "diagnosticEmptyBody": #expect(message.contains("empty response body"))
+            default: Issue.record("Unhandled test case")
+            }
+        }
+        #expect(TransferStub.snapshot().count == 1)
+        #expect(!FileManager.default.fileExists(atPath: result.path))
+        #expect(FileManager.default.fileExists(atPath: wav.path))
+    }
+    @Test(arguments: [false, true])
+    func corruptSavedTranscriptionIsIdentifiedWithoutAnotherUpload(part: Bool) async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let wav = directory.appendingPathComponent("audio.wav"), result = directory.appendingPathComponent("result.json")
+        try silentWAV(wav, seconds: 2)
+        let cached = part ? directory.appendingPathComponent("result.part-0.json") : result
+        let contents = Data(#"{"durationMilliseconds":"private transcript test-key"}"#.utf8)
+        try contents.write(to: cached)
+        let client = try MAITranscriber(endpoint: "https://openrouter.ai/api/v1", key: "test-key", session: session())
+        TransferStub.reset("success")
+        do {
+            _ = try await client.transcribe(wav, resultFile: result)
+            Issue.record("Corrupt saved result was accepted")
+        } catch {
+            let message = error.localizedDescription
+            #expect(message.contains("Saved transcription result") && message.contains("wrong type at durationMilliseconds"))
+            #expect(!message.contains("private transcript") && !message.contains("test-key"))
+            if part { #expect(message.contains("part 1/1")) }
+        }
+        #expect(TransferStub.snapshot().isEmpty)
+        #expect(try Data(contentsOf: cached) == contents)
     }
     @Test func uploadAndResponseLossRetryAndCacheSurvivesRelaunch() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -293,6 +368,12 @@ private final class UploadMonitor: EventMonitor, @unchecked Sendable {
         for channel in 0..<2 { for index in 0..<48000 { buffer.floatChannelData![channel][index] = Float(sin(Double(index) * 0.02)) * 0.1 } }
         try file.write(from: buffer)
     }
+    do {
+        _ = try AudioPreparation.chunks(from: source, prefix: directory.appendingPathComponent("invalid"))
+        Issue.record("Unprepared transcription audio was accepted")
+    } catch {
+        #expect(error.localizedDescription.contains("48000.0 Hz, 2 channels"))
+    }
     try AudioPreparation.wav(from: source, to: destination)
     let prepared = try AVAudioFile(forReading: destination)
     #expect(prepared.processingFormat.sampleRate == 16000 && prepared.processingFormat.channelCount == 1)
@@ -332,7 +413,13 @@ private final class UploadMonitor: EventMonitor, @unchecked Sendable {
     #expect(transcript.orderedSegments.map(\.start) == [0.5, 2])
     #expect(transcript.orderedSegments.map(\.end) == [1.5, 33.5])
     let invalid = json.replacingOccurrences(of: "\"offsetMilliseconds\":33000", with: "\"offsetMilliseconds\":-1")
-    #expect(throws: ImportError.self) { try JSONDecoder().decode(MAIResult.self, from: Data(invalid.utf8)).validate() }
+    do {
+        try JSONDecoder().decode(MAIResult.self, from: Data(invalid.utf8)).validate()
+        Issue.record("Invalid word timing was accepted")
+    } catch {
+        #expect(error.localizedDescription.contains("phrase 1, word 4") && error.localizedDescription.contains("offset -1.0 ms"))
+        #expect(!error.localizedDescription.contains("listening"))
+    }
 }
 
 private func silentWAV(_ file: URL, seconds: Int) throws {

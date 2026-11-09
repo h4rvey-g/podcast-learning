@@ -23,7 +23,13 @@ private final class AudioProtocol: URLProtocol, @unchecked Sendable {
     let session = URLSession(configuration: config); defer { session.invalidateAndCancel() }
     let id = UUID(); defer { try? AudioStore.delete(id) }
     for path in ["fail", "html", "offline"] {
-        await #expect(throws: (any Error).self) { try await AudioStore.download(URL(string: "https://example.com/\(path)")!, id: id, session: session) }
+        do {
+            try await AudioStore.download(URL(string: "https://example.com/\(path)")!, id: id, session: session)
+            Issue.record("Invalid audio download was accepted")
+        } catch {
+            if path == "fail" { #expect(error.localizedDescription.contains("Episode audio download failed (HTTP 503)")) }
+            if path == "html" { #expect(error.localizedDescription.contains("text/JSON instead of audio (HTTP 200)")) }
+        }
         #expect(AudioStore.localURL(id) == nil)
     }
     let progress = ProgressValues()

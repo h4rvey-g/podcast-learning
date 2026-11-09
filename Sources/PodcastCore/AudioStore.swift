@@ -31,8 +31,13 @@ public struct AudioStore {
         guard ["https", "http"].contains(remote.scheme) else { throw ImportError.invalidURL }
         let (temporary, response) = try await session.download(from: remote, delegate: AudioDownloadProgress(report: progress))
         defer { try? FileManager.default.removeItem(at: temporary) }
-        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode),
-              !(http.mimeType ?? "").contains("text"), !(http.mimeType ?? "").contains("json") else { throw ImportError.invalidResponse }
+        guard let http = response as? HTTPURLResponse else { throw ImportError.service("Episode audio download returned no HTTP response.") }
+        guard (200..<300).contains(http.statusCode) else {
+            throw ImportError.service("Episode audio download failed (HTTP \(http.statusCode)). The source may require sign-in or the audio link may have expired.")
+        }
+        guard !(http.mimeType ?? "").contains("text"), !(http.mimeType ?? "").contains("json") else {
+            throw ImportError.service("Episode audio download returned text/JSON instead of audio (HTTP \(http.statusCode)). The source may require sign-in or the audio link may have expired.")
+        }
         let destination = try file(id)
         if FileManager.default.fileExists(atPath: destination.path) {
             _ = try FileManager.default.replaceItemAt(destination, withItemAt: temporary)

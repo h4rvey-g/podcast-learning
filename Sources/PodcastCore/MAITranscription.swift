@@ -16,18 +16,42 @@ public struct MAIResult: Codable, Sendable {
         public let offsetMilliseconds: Double
         public let durationMilliseconds: Double
     }
+    public static func load(from file: URL) throws -> MAIResult {
+        let data = try Data(contentsOf: file)
+        do {
+            let result = try JSONDecoder().decode(MAIResult.self, from: data)
+            try result.validate()
+            return result
+        } catch let error as DecodingError {
+            throw ImportError.service("Saved transcription result: \(transcriptionDecodingMessage(error)).")
+        } catch {
+            throw ImportError.service("Saved transcription result: \(error.localizedDescription)")
+        }
+    }
     public func validate() throws {
-        guard durationMilliseconds.isFinite, durationMilliseconds > 0, durationMilliseconds < 7_200_000,
-              !phrases.isEmpty, phrases.count <= 100_000 else { throw ImportError.invalidResponse }
-        for phrase in phrases {
-            guard !phrase.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-                  phrase.offsetMilliseconds.isFinite, phrase.durationMilliseconds.isFinite,
+        guard durationMilliseconds.isFinite, durationMilliseconds > 0, durationMilliseconds < 7_200_000 else {
+            throw ImportError.service("Invalid transcription durationMilliseconds: \(durationMilliseconds); expected 0–7200000 ms (exclusive).")
+        }
+        guard !phrases.isEmpty else { throw ImportError.service("The transcription result contains no phrases. No speech may have been recognized.") }
+        guard phrases.count <= 100_000 else { throw ImportError.service("The transcription result exceeds 100000 phrases.") }
+        for (index, phrase) in phrases.enumerated() {
+            guard !phrase.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                throw ImportError.service("Empty text in transcription phrase \(index + 1).")
+            }
+            guard phrase.offsetMilliseconds.isFinite, phrase.durationMilliseconds.isFinite,
                   phrase.offsetMilliseconds >= 0, phrase.durationMilliseconds > 0,
-                  phrase.offsetMilliseconds + phrase.durationMilliseconds <= durationMilliseconds + 1000 else { throw ImportError.invalidResponse }
-            for word in phrase.words ?? [] {
-                guard !word.text.isEmpty, word.offsetMilliseconds.isFinite, word.durationMilliseconds.isFinite,
+                  phrase.offsetMilliseconds + phrase.durationMilliseconds <= durationMilliseconds + 1000 else {
+                throw ImportError.service("Invalid timestamps in transcription phrase \(index + 1): offset \(phrase.offsetMilliseconds) ms, duration \(phrase.durationMilliseconds) ms, audio duration \(durationMilliseconds) ms.")
+            }
+            for (wordIndex, word) in (phrase.words ?? []).enumerated() {
+                guard !word.text.isEmpty else {
+                    throw ImportError.service("Empty text in transcription phrase \(index + 1), word \(wordIndex + 1).")
+                }
+                guard word.offsetMilliseconds.isFinite, word.durationMilliseconds.isFinite,
                       word.offsetMilliseconds >= phrase.offsetMilliseconds, word.durationMilliseconds >= 0,
-                      word.offsetMilliseconds + word.durationMilliseconds <= phrase.offsetMilliseconds + phrase.durationMilliseconds + 1000 else { throw ImportError.invalidResponse }
+                      word.offsetMilliseconds + word.durationMilliseconds <= phrase.offsetMilliseconds + phrase.durationMilliseconds + 1000 else {
+                    throw ImportError.service("Invalid timestamps in transcription phrase \(index + 1), word \(wordIndex + 1): offset \(word.offsetMilliseconds) ms, duration \(word.durationMilliseconds) ms; phrase range \(phrase.offsetMilliseconds)–\(phrase.offsetMilliseconds + phrase.durationMilliseconds) ms.")
+                }
             }
         }
     }
@@ -96,7 +120,7 @@ public struct MAITranscriber {
     }
     public func transcribe(_ audio: URL, resultFile: URL,
                            progress: @escaping @Sendable (Double) -> Void = { _ in }) async throws -> MAIResult {
-        if FileManager.default.fileExists(atPath: resultFile.path) { return try cached(resultFile) }
+        if FileManager.default.fileExists(atPath: resultFile.path) { return try MAIResult.load(from: resultFile) }
         guard audio.pathExtension.lowercased() == "wav" else { throw ImportError.service("Prepare WAV audio before transcription.") }
         let size = try audio.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
         guard size > 44, size < 250_000_000 else { throw ImportError.service("Use audio smaller than 250 MB and shorter than two hours.") }
@@ -110,15 +134,21 @@ public struct MAITranscriber {
                 try Task.checkCancellation()
                 let checkpoint = prefix.appendingPathExtension("part-\(index).json")
                 let part: MAIResult
-                if FileManager.default.fileExists(atPath: checkpoint.path) { part = try cached(checkpoint) }
-                else {
-                    let data = try await upload(chunk.file, progress: { fraction in
-                        progress((chunk.offset + fraction * chunk.duration) / duration)
-                    })
-                    part = try JSONDecoder().decode(RouterResult.self, from: data).normalized(duration: chunk.duration)
-                    try persist(part, to: checkpoint)
+                do {
+                    if FileManager.default.fileExists(atPath: checkpoint.path) { part = try MAIResult.load(from: checkpoint) }
+                    else {
+                        part = try await upload(chunk.file, duration: chunk.duration, progress: { fraction in
+                            progress((chunk.offset + fraction * chunk.duration) / duration)
+                        })
+                        try persist(part, to: checkpoint)
+                    }
+                    guard part.durationMilliseconds <= chunk.duration * 1000 + 1000 else {
+                        throw ImportError.service("Saved part duration \(part.durationMilliseconds) ms exceeds audio part duration \(chunk.duration * 1000) ms.")
+                    }
+                } catch {
+                    if error is CancellationError { throw error }
+                    throw ImportError.service("OpenRouter part \(index + 1)/\(chunks.count): \(error.localizedDescription)")
                 }
-                guard part.durationMilliseconds <= chunk.duration * 1000 + 1000 else { throw ImportError.invalidResponse }
                 let offset = chunk.offset * 1000
                 phrases += part.phrases.map { phrase in
                     MAIResult.Phrase(text: phrase.text, offsetMilliseconds: phrase.offsetMilliseconds + offset,
@@ -129,14 +159,17 @@ public struct MAITranscriber {
             }
             result = MAIResult(durationMilliseconds: duration * 1000, phrases: phrases)
         } else {
-            result = try JSONDecoder().decode(MAIResult.self, from: await upload(audio, progress: progress))
+            result = try await upload(audio, progress: progress)
         }
         try persist(result, to: resultFile)
         return result
     }
-    private func upload(_ audio: URL, progress: @escaping @Sendable (Double) -> Void) async throws -> Data {
+    private func upload(_ audio: URL, duration: Double? = nil,
+                        progress: @escaping @Sendable (Double) -> Void) async throws -> MAIResult {
         if isOpenRouter {
-            guard (try audio.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0) < 25_000_000 else { throw ImportError.tooLarge }
+            guard (try audio.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0) < 25_000_000 else {
+                throw ImportError.service("OpenRouter transcription audio part exceeds the 25 MB upload limit.")
+            }
         }
         let definition = Data(#"{"enhancedMode":{"enabled":true,"model":"MAI-Transcribe-2","modelOptions":{"timestamps":"word","transcribeStyle":"verbatim"}}}"#.utf8)
         let router = isOpenRouter, model = model
@@ -151,13 +184,45 @@ public struct MAITranscriber {
         }, to: endpoint, usingThreshold: 0, headers: headers)
             .redirect(using: Redirector(behavior: .doNotFollow))
             .validate(statusCode: 200..<300).uploadProgress { progress($0.fractionCompleted) }
-        let data = try await request.serializingData().value
-        guard data.count <= 25_000_000 else { throw ImportError.tooLarge }
-        return data
-    }
-    private func cached(_ file: URL) throws -> MAIResult {
-        let result = try JSONDecoder().decode(MAIResult.self, from: Data(contentsOf: file))
-        try result.validate(); return result
+        let response = await request.serializingData(emptyResponseCodes: []).response
+        try Task.checkCancellation()
+        let provider = router ? "OpenRouter" : "Azure Speech"
+        let status = response.response?.statusCode
+        let mime = response.response?.mimeType ?? ""
+        let format = ["application/json", "application/problem+json", "text/html", "text/plain"].contains(mime) ? mime : "other/unknown content type"
+        let context = "\(provider) transcription (HTTP \(status.map(String.init) ?? "unavailable"), \(format), \(response.data?.count ?? 0) bytes)"
+        if let status, !(200..<300).contains(status) {
+            let hint: String
+            switch status {
+            case 401, 403: hint = "Check the saved Speech API key and its access to the selected speech model/resource (separate from the text AI key)."
+            case 404: hint = "Check the speech endpoint and model availability."
+            case 413: hint = "The speech provider rejected the audio upload size."
+            case 429: hint = "The speech provider's rate limit or quota was reached. Retry later or check billing."
+            case 500...599: hint = "The speech provider is unavailable or failed. Try again later."
+            default: hint = "The speech provider rejected the request. Check the speech model, audio format, and timestamp support."
+            }
+            throw ImportError.service("\(context): \(hint)")
+        }
+        if let error = response.error {
+            if case .responseSerializationFailed(reason: .inputDataNilOrZeroLength) = error {
+                throw ImportError.service("\(context): empty response body; expected a timed JSON transcript.")
+            }
+            let code = (error.underlyingError as? URLError)?.code.rawValue
+            throw ImportError.service("\(context): upload/response transfer failed\(code.map { " (network code \($0))" } ?? ""). Check your connection and retry; downloaded audio and completed results are kept.")
+        }
+        let data = try response.result.get()
+        guard data.count <= 25_000_000 else { throw ImportError.service("\(context): transcription response exceeds 25 MB.") }
+        do {
+            let result: MAIResult
+            if let duration { result = try JSONDecoder().decode(RouterResult.self, from: data).normalized(duration: duration) }
+            else { result = try JSONDecoder().decode(MAIResult.self, from: data) }
+            try result.validate()
+            return result
+        } catch let error as DecodingError {
+            throw ImportError.service("\(context): \(transcriptionDecodingMessage(error)); expected a timed JSON transcript.")
+        } catch {
+            throw ImportError.service("\(context): \(error.localizedDescription)")
+        }
     }
     private func persist(_ result: MAIResult, to file: URL) throws {
         try result.validate()
@@ -186,8 +251,24 @@ public struct MAITranscriber {
                 phrases = [MAIResult.Phrase(text: text, offsetMilliseconds: 0, durationMilliseconds: duration * 1000, speaker: nil,
                     words: words.map { MAIResult.Word(text: $0.word, offsetMilliseconds: $0.start * 1000, durationMilliseconds: ($0.end - $0.start) * 1000) })]
             } else { throw ImportError.service("The speech provider returned no timestamps. Choose a model supporting verbose_json timestamps.") }
-            let result = MAIResult(durationMilliseconds: duration * 1000, phrases: phrases)
-            try result.validate(); return result
+            return MAIResult(durationMilliseconds: duration * 1000, phrases: phrases)
         }
+    }
+}
+
+private func transcriptionDecodingMessage(_ error: DecodingError) -> String {
+    func path(_ context: DecodingError.Context) -> String {
+        let value = context.codingPath.map { $0.stringValue }.joined(separator: ".")
+        return value.isEmpty ? "root" : value
+    }
+    // Decoder debug descriptions can contain response text; report only typed field paths.
+    switch error {
+    case .keyNotFound(let key, let context):
+        let field = context.codingPath.isEmpty ? key.stringValue : "\(path(context)).\(key.stringValue)"
+        return "missing field \(field)"
+    case .typeMismatch(_, let context): return "wrong type at \(path(context))"
+    case .valueNotFound(_, let context): return "null value at \(path(context))"
+    case .dataCorrupted(let context): return "invalid JSON or invalid field value at \(path(context))"
+    @unknown default: return "invalid JSON transcript"
     }
 }
